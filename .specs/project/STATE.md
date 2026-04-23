@@ -48,8 +48,7 @@ Memória persistente entre sessões. Curta e mutável. Não é log; é contexto 
 - Modo Caveman ativo (lite OK em prosa pedagógica, normal em código/decisões técnicas).
 - Pedagogia obrigatória: explicar cada move + por quê, ênfase em features de LLM.
 - Pausas para confirmação em decisões de alto impacto (custo LLM, agent loop, retry policy).
-- Idioma de docs/specs: PT-BR (PRD está em PT-BR).
-- Idioma de código/comentários: EN (convenção padrão da indústria; deixa código portável).
+- Language: **English for all new artifacts** (docs, specs, prose, code, comments, commits). Changed 2026-04-22 by explicit user request. Existing PT-BR content (PRD.md, earlier STATE entries, earlier commits) is left as-is; only new writing goes in EN.
 
 ## Sessão atual
 
