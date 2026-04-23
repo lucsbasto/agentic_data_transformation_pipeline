@@ -36,8 +36,8 @@ F2 will **not** re-validate the Bronze schema beyond what Polars enforces on rea
 | F2-RF-06 | `lead_id` = first 16 hex chars of `HMAC-SHA256(PIPELINE_LEAD_SECRET, normalized_phone)`. `normalized_phone` = keep digits only from `sender_phone`. Deterministic per run. |
 | F2-RF-07 | PII masking, positional (dimensions preserved): email → `a****@g****.com`; CPF → `***.***.***-**`; phone → `+55 (**) *****-**XX` (last 2 digits kept); CEP → `*****-***`; plate → `***1D**` (new Mercosul) / `***1D23` (old) — generic rule: keep positional letters-vs-digits template, mask alphanum content. Applied to `message_body` and to any phone/email/cpf in `sender_name`. |
 | F2-RF-08 | `has_content` boolean: `false` when `message_body` is empty/whitespace OR `message_type` in {`image`, `audio`, `video`, `sticker`, `document`} AND `message_body` length < 8 chars. True otherwise. |
-| F2-RF-09 | Manifest: new table `silver_runs(batch_id TEXT PK, bronze_batch_id TEXT FK → batches.batch_id, status, started_at, finished_at, duration_ms, rows_read, rows_written, rows_deduped, silver_path, error_type, error_message)`. ON DELETE CASCADE from `batches`. |
-| F2-RF-10 | Idempotency: if `silver_runs.batch_id` is already `COMPLETED` for the target Bronze batch, CLI short-circuits with a skip log line. Stale `IN_PROGRESS` or `FAILED` rows are deleted and retried (F1 pattern). |
+| F2-RF-09 | Manifest: reuse the existing `runs(run_id PK, batch_id FK, layer, status, started_at, finished_at, rows_in, rows_out, error_type, error_message)` table (already declared by F1 with `layer IN ('bronze','silver','gold')`). Add two generic columns: `output_path TEXT` (Silver/Gold parquet directory) and `rows_deduped INTEGER` (Silver-specific, null for other layers). No new table. |
+| F2-RF-10 | Idempotency: if `runs` has a row with `layer='silver'`, `batch_id=<bid>`, `status='COMPLETED'`, the CLI short-circuits with a skip log line. Stale `IN_PROGRESS` or `FAILED` silver rows for the same batch are deleted and retried (F1 pattern). |
 | F2-RF-11 | CLI: `python -m pipeline transform-silver --batch-id <bid>`. `--batch-id` is required. No `--latest` flag in F2 (defer to F5). |
 | F2-RF-12 | Every Silver run logs structured events: `silver.start`, `silver.batch.opened`, `silver.dedup.done` (with `rows_before`, `rows_after`), `silver.mask.done` (with `masked_emails`, `masked_cpfs`, ... counts), `silver.complete` / `silver.failed`. `run_id` + `batch_id` bound to context for the whole run. |
 
@@ -62,7 +62,7 @@ F2 will **not** re-validate the Bronze schema beyond what Polars enforces on rea
 | D3 | `lead_id` construction | HMAC-SHA256 with env secret; 16 hex chars. | Not reversible without secret. Truncation keeps row size small; 16 hex = 64-bit space — enough for ~15k leads. |
 | D4 | Dedup tie-break | `status` priority `read>delivered>sent>other`, then `timestamp` DESC. | `read` is the latest lifecycle event for a delivered message. Matches PRD "evento mais recente". |
 | D5 | Silver partitioning | `data/silver/batch_id=<bid>/` (mirror Bronze). | Keeps lineage 1:1 with Bronze batch. Date-partitioning is a Gold/analytics concern, not Silver. |
-| D6 | Manifest layout | New table `silver_runs`, FK to `batches`. | Extensible to `gold_runs` in F3. Multiple Silver rebuilds per Bronze batch stay separable. Keeps `batches` append-only and stable. |
+| D6 | Manifest layout | **Reuse the existing `runs` table (F1 already carved it with `layer IN ('bronze','silver','gold')`)**; add two generic columns: `output_path`, `rows_deduped`. Supersedes the earlier "new `silver_runs` table" proposal. | Single source of truth for run history across layers. F3 gets Gold for free just by passing `layer='gold'`. Revised after code review spotted the existing table on 2026-04-23. |
 | D7 | Re-run on COMPLETED Silver | Skip with log + CLI echo. | Consistent with F1 batch idempotency. Explicit `--force` flag deferred to F5. |
 | D8 | `--batch-id` contract | Required. | No magic defaults in F2. `--latest` lands in F5 alongside the watch loop. |
 | D9 | Audio transcription confidence | Deferred to F3 (needs LLM/heuristic noise scoring). F2 only sets `has_content` boolean. | Keeps F2 deterministic. Confidence model belongs near entity extraction. |
@@ -102,7 +102,7 @@ Silver parquet schema (`src/pipeline/schemas/silver.py`):
 4. Dedup reduces the fixture 153,228 rows to the expected count of unique `(conversation_id, message_id)` pairs; the delta equals `rows_deduped` in the manifest.
 5. No raw CPF / email / phone / CEP / plate appears in any `message_body_masked` value, verified by regex scan over the written parquet in an integration test.
 6. `lead_id` is stable across runs for the same phone, and two different phones never collide in the fixture.
-7. Manifest `silver_runs` row exists with status `COMPLETED`, `bronze_batch_id` matching, non-zero `duration_ms`, `rows_written > 0`.
+7. Manifest `runs` table has a row with `layer='silver'`, matching `batch_id`, `status='COMPLETED'`, non-zero duration, `rows_out > 0`, populated `output_path`.
 8. `ruff check`, `mypy --strict src tests`, `pytest -q` all green. Coverage ≥ 90% on new code.
 
 ## 8. Open questions (none blocking)

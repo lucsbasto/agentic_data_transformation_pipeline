@@ -9,7 +9,7 @@ Legend: ✅ done · 🟡 in progress · ⚪ pending
 | **F2.0** | Create `.specs/features/F2/{spec,design,tasks}.md` and update ROADMAP + STATE | — | files exist; `git status` clean | ⚪ |
 | **F2.1** | Add `schemas/silver.py` with `METADATA_STRUCT` and `SILVER_SCHEMA`. LEARN comments on every type choice. | F2.0 | `pytest tests/unit/test_schemas_silver.py -q` (new) passes; schema round-trips through a fabricated `pl.DataFrame` | ⚪ |
 | **F2.2** | Extend `Settings` with `pipeline_lead_secret: SecretStr` (required, no default). Document env var in `.env.example`. | F2.0 | `pytest tests/unit/test_settings.py -q` passes (new case: missing secret raises) | ⚪ |
-| **F2.3** | Extend `state/manifest.py`: DDL for `silver_runs`, row dataclass `SilverRunRow`, methods `insert_silver_run` / `mark_silver_completed` / `mark_silver_failed` / `get_silver_run` / `is_silver_completed` / `delete_silver_run` / `reset_stale_silver`. Cascade from `batches` via FK + PRAGMA enabled. | F2.0 | `pytest tests/unit/test_manifest_silver.py -q` covers: insert→complete→get, insert→fail→get, stale sweep, cascade on parent delete, `is_silver_completed` returns the right bool | ⚪ |
+| **F2.3** | Extend `schemas/manifest.py` + `state/manifest.py`: add columns `output_path TEXT` and `rows_deduped INTEGER` to the existing `runs` table (via idempotent `ALTER TABLE` guarded by `PRAGMA table_info`). Introduce layer-parameterized helpers on `ManifestDB`: `insert_run`, `mark_run_completed`, `mark_run_failed`, `get_run`, `get_latest_run`, `is_run_completed`, `delete_runs_for`, and extend `reset_stale_runs` to sweep any layer. `RunRow` dataclass mirrors the updated table. | F2.0 | `pytest tests/unit/test_manifest_runs.py -q` covers: add-column migration is idempotent on an existing F1 DB, insert→complete→get, insert→fail→get, stale sweep per layer, cascade on parent delete, `is_run_completed(batch_id, 'silver')` returns the right bool. | ⚪ |
 | **F2.4** | `silver/pii.py` — compile regexes, write pure maskers for email / CPF / phone / CEP / plate. LEARN comments explaining the positional masking choice. | F2.0 | `pytest tests/unit/test_silver_pii.py -q` — fixture table of inputs/outputs for each type, including negatives (no false positives on normal text) | ⚪ |
 | **F2.5** | `silver/normalize.py` — `parse_timestamp_utc`, `parse_metadata`, `normalize_name`. LEARN comments on UTC handling and NFKD accent stripping. | F2.0 | `pytest tests/unit/test_silver_normalize.py -q` — unit cases for timezone attach, malformed metadata → null, accent/case normalization | ⚪ |
 | **F2.6** | `silver/lead.py` — HMAC-based `lead_id_expr`. LEARN comments on HMAC vs hash, secret handling. | F2.2 | `pytest tests/unit/test_silver_lead.py -q` — same phone → same id, different phone → different id, id length 16, id depends on secret | ⚪ |
@@ -28,7 +28,7 @@ One commit per atomic task, except where indicated below:
 - F2.0 → `docs(F2): scaffold spec/design/tasks and update roadmap`
 - F2.1 → `feat(F2): add silver schema and metadata struct`
 - F2.2 → `feat(F2): wire PIPELINE_LEAD_SECRET through settings`
-- F2.3 → `feat(F2): extend manifest with silver_runs table and helpers`
+- F2.3 → `feat(F2): extend manifest runs table with output_path and rows_deduped`
 - F2.4 → `feat(F2): positional PII maskers (email/cpf/phone/cep/plate)`
 - F2.5 → `feat(F2): silver normalizers (timestamp/metadata/name)`
 - F2.6 → `feat(F2): lead_id via hmac-sha256 polars expression`
