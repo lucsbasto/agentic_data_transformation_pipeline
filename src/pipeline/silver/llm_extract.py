@@ -128,7 +128,8 @@ def extract_entities_from_body(
         logger.warning(
             "llm.extraction.failed",
             error=str(exc),
-            body_preview=body[:200],
+            body_hash=_body_hash(body),
+            body_len=len(body),
         )
         return ExtractedEntities.null()
     # LEARN: LLMClient is documented to raise only LLMCallError, but a
@@ -315,7 +316,8 @@ def _call_and_parse(
         logger.warning(
             "llm.extraction.failed",
             error=str(exc),
-            body_preview=body[:200],
+            body_hash=_body_hash(body),
+            body_len=len(body),
         )
         return ExtractedEntities.null(), _NULL_METRICS
     except Exception as exc:
@@ -351,26 +353,32 @@ def _call_and_parse(
 
 def _parse_response(text: str, *, body: str) -> ExtractedEntities:
     logger = get_logger("pipeline.silver.llm")
+    body_hash = _body_hash(body)
+    body_len = len(body)
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
-            response_preview=text[:200],
+            body_hash=body_hash,
+            body_len=body_len,
+            response_len=len(text),
+            reason="json_decode_error",
         )
         return ExtractedEntities.null()
     if not isinstance(payload, dict):
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
+            body_hash=body_hash,
+            body_len=body_len,
             reason="not_an_object",
         )
         return ExtractedEntities.null()
     if any(k not in payload for k in _REQUIRED_FIELDS):
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
+            body_hash=body_hash,
+            body_len=body_len,
             reason="missing_fields",
         )
         return ExtractedEntities.null()
