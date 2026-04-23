@@ -204,8 +204,9 @@ row:
 Every column here is *non-identifying* by construction — domain
 without local part, region prefix without street, format class
 without plate characters. The boolean flags carry presence without
-leaking digits. The LLM extraction lane (veículo, concorrente, valor
-atual, histórico de sinistros — PRD §6.2) lands in a later F2 slice.
+leaking digits. The complementary LLM extraction lane (veículo,
+concorrente, valor atual, histórico de sinistros — PRD §6.2) runs
+after the pure transform collects — see step 5j.
 
 File: `src/pipeline/silver/extract.py`,
 `src/pipeline/silver/transform.py` (the five extract expressions in
@@ -258,6 +259,47 @@ File: `src/pipeline/silver/normalize.py:parse_metadata_expr`
   (`datetime.now(tz=UTC)` stamped at CLI invocation).
 
 File: `src/pipeline/silver/transform.py:silver_transform`
+
+### 5j. LLM-extracted entities (post-collect)
+
+The six PRD §6.2 analytical columns that a regex cannot extract —
+`veiculo_marca`, `veiculo_modelo`, `veiculo_ano`,
+`concorrente_mencionado`, `valor_pago_atual_brl`,
+`sinistro_historico` — are filled by an LLM call, not by the pure
+Polars `select`. The transform seeds each column with a typed `null`
+literal so `SILVER_SCHEMA` is already satisfied at collect time; the
+CLI then runs `apply_llm_extraction` on the collected DataFrame and
+re-asserts the schema.
+
+Why the LLM step lives outside the pure transform:
+
+- It needs a collaborator (`LLMClient`) that we inject at the CLI
+  boundary, keeping the pure transform trivially testable.
+- It dedupes by `message_body_masked` so the same text is never
+  round-tripped twice per run — a Polars expression cannot express
+  that cheaply.
+- It must enforce the PRD §18.4 call budget and stop mid-batch
+  without crashing; pure-expression failure modes do not fit.
+
+Budget + failure contract (PRD §18.1, §18.4):
+
+- Budget is `PIPELINE_LLM_MAX_CALLS_PER_BATCH` (default 5000). Only
+  cache *misses* consume the budget; cache hits are free by design
+  (prompt/response pairs are deterministic).
+- Over-budget unique bodies get an all-null `ExtractedEntities` and
+  one `llm.budget_exhausted` log line fires per batch.
+- Invalid JSON, missing fields, or a provider error after the
+  client's own retry budget → all-null entities for that row, log
+  `llm.extraction.invalid_json` or `llm.extraction.failed`. The
+  batch keeps going: LLM unavailability is an operational event, not
+  a row-contract violation (RF-08 quarantine is not triggered).
+- `PROMPT_VERSION='v1'` is baked into the system prompt so the
+  SHA-256 cache key naturally busts when the prompt changes — no
+  separate `LLMCache.invalidate` dance is required.
+
+Files: `src/pipeline/silver/llm_extract.py`,
+`src/pipeline/cli/silver.py:_build_silver_frame` (orchestration,
+bracketed by two `assert_silver_schema` calls).
 
 ---
 
