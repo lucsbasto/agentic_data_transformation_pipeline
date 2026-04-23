@@ -7,6 +7,22 @@ runs plus the agent loop will reuse the same file in later features.
 
 from __future__ import annotations
 
+# LEARN: the stdlib imports below. Worth knowing what each one gives us:
+#   - ``sqlite3``       — Python's built-in SQL engine. Embedded, no
+#                         server; perfect for a single-operator pipeline.
+#   - ``Iterator``      — static type for "yields values one at a time";
+#                         annotates the ``_transaction`` generator below.
+#   - ``contextmanager`` — decorator that turns a ``yield``-using function
+#                         into something you can ``with``-block over.
+#                         Everything BEFORE ``yield`` runs on enter, and
+#                         AFTER ``yield`` runs on exit (including on
+#                         exceptions). Classic acquire/release pattern.
+#   - ``dataclass``     — auto-generates ``__init__`` / ``__repr__`` /
+#                         ``__eq__`` from type-annotated attributes. With
+#                         ``frozen=True`` + ``slots=True`` we get
+#                         immutable, memory-light value objects.
+#   - ``datetime`` + ``UTC`` — build timezone-aware timestamps.
+#   - ``pathlib.Path`` — object-oriented filesystem paths.
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,6 +47,10 @@ STALE_ERROR_MESSAGE: str = (
 )
 
 
+# LEARN: ``@dataclass(frozen=True, slots=True)`` = a value object. The
+# attributes declared below become immutable once the instance is built.
+# The type hints drive the auto-generated ``__init__`` — ``BatchRow(...)``
+# only accepts the keyword names listed here.
 @dataclass(frozen=True, slots=True)
 class BatchRow:
     """Typed projection of one row from the ``batches`` table."""
@@ -40,6 +60,8 @@ class BatchRow:
     source_hash: str
     source_mtime: int
     status: str
+    # LEARN: ``int | None`` means "either int or None". The Python 3.10+
+    # pipe syntax replaces ``Optional[int]``.
     rows_read: int | None
     rows_written: int | None
     bronze_path: str | None
@@ -49,6 +71,9 @@ class BatchRow:
     error_type: str | None
     error_message: str | None
 
+    # LEARN: ``@property`` turns a method into a read-only attribute:
+    # ``row.is_completed`` not ``row.is_completed()``. Great for tiny
+    # derived booleans that keep call sites clean.
     @property
     def is_completed(self) -> bool:
         return self.status == BATCH_STATUS_COMPLETED
@@ -67,28 +92,61 @@ class ManifestDB:
     """
 
     def __init__(self, db_path: Path | str) -> None:
+        # LEARN: the class stores ``db_path`` as a Path (for real files)
+        # or a string (for the in-memory ``:memory:`` case). We check
+        # with ``==`` rather than ``isinstance`` because ``":memory:"``
+        # is a magic SQLite path, not a real filesystem entry.
         self._db_path: Path | str = db_path if db_path == ":memory:" else Path(db_path)
+        # LEARN: the connection starts ``None`` and is created in
+        # ``open()``. Keeping it Optional lets ``close()`` / ``reopen``
+        # work cleanly without an "is it open?" boolean.
         self._conn: sqlite3.Connection | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
     def open(self) -> ManifestDB:
         """Open (or reopen) the connection and ensure the schema."""
+        # LEARN: ``is not None`` checks identity, not truthiness. An empty
+        # list is falsy but ``[] is None`` is False — always use ``is
+        # None`` / ``is not None`` when checking for None.
         if self._conn is not None:
             return self
         if isinstance(self._db_path, Path):
+            # LEARN: ``.parent`` is the directory that contains the file.
+            # ``mkdir(parents=True, exist_ok=True)`` = "create any missing
+            # parent dirs; don't error if the directory already exists".
+            # The classic ``mkdir -p`` behaviour.
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             target: str = str(self._db_path)
         else:
             target = self._db_path
+        # LEARN: ``isolation_level=None`` turns OFF sqlite3's auto-commit
+        # wrapping. We issue BEGIN / COMMIT / ROLLBACK manually in
+        # ``_transaction`` below, which gives us precise control.
         conn = sqlite3.connect(target, isolation_level=None)  # autocommit off via BEGIN
+        # LEARN: ``sqlite3.Row`` makes fetched rows addressable by
+        # column name (``row["batch_id"]``) in addition to index
+        # (``row[0]``). We convert to dataclasses downstream.
         conn.row_factory = sqlite3.Row
+        # LEARN: SQLite's foreign-key enforcement is OFF by default for
+        # backward compatibility. We turn it on so ``ON DELETE CASCADE``
+        # from ``schemas/manifest.py`` actually fires.
         conn.execute("PRAGMA foreign_keys = ON;")
+        # LEARN: ``busy_timeout`` makes SQLite wait up to 5 s when
+        # another connection holds a lock, instead of failing with
+        # SQLITE_BUSY immediately. Critical under concurrent writers.
         conn.execute("PRAGMA busy_timeout = 5000;")
         if target != ":memory:":
+            # LEARN: WAL = "Write-Ahead Logging". A journaling mode that
+            # lets one writer and many readers operate without blocking
+            # each other. Does not work on ``:memory:`` databases.
             conn.execute("PRAGMA journal_mode = WAL;")
         self._conn = conn
         self.ensure_schema()
+        # LEARN: on every open, sweep leftover IN_PROGRESS rows from a
+        # previous crashed process to FAILED. Without this, a Ctrl-C at
+        # the wrong moment would block future runs from reusing that
+        # batch_id (primary-key collision).
         self.reset_stale()
         return self
 
@@ -97,6 +155,10 @@ class ManifestDB:
             self._conn.close()
             self._conn = None
 
+    # LEARN: ``__enter__`` / ``__exit__`` are the *context-manager
+    # protocol*. They let callers write ``with ManifestDB(path) as db:``
+    # and Python guarantees ``__exit__`` (which closes the connection)
+    # runs even if the ``with`` body raises.
     def __enter__(self) -> ManifestDB:
         return self.open()
 
@@ -107,6 +169,9 @@ class ManifestDB:
 
     def ensure_schema(self) -> None:
         with self._transaction() as cur:
+            # LEARN: ``ALL_DDL`` is the tuple of DDL strings from
+            # ``schemas/manifest.py``. Each ``IF NOT EXISTS`` makes the
+            # call idempotent — safe to run on every open.
             for stmt in ALL_DDL:
                 cur.execute(stmt)
 
@@ -121,8 +186,14 @@ class ManifestDB:
         Returns the number of rows swept. ``now_iso`` is injectable so tests
         can assert a deterministic timestamp.
         """
+        # LEARN: the ``*,`` in the signature forces ``now_iso`` to be
+        # passed as a keyword argument. Prevents ``reset_stale("...")``
+        # callers from accidentally binding a positional value.
         finished_at = now_iso if now_iso is not None else _utcnow_iso()
         with self._transaction() as cur:
+            # LEARN: ``?`` placeholders are SQLite's SQL-injection guard.
+            # NEVER interpolate user data into SQL with f-strings — the
+            # tuple argument binds values safely.
             cur.execute(
                 "UPDATE batches SET status = ?, finished_at = ?, "
                 "error_type = ?, error_message = ? "
@@ -135,6 +206,8 @@ class ManifestDB:
                     BATCH_STATUS_IN_PROGRESS,
                 ),
             )
+            # LEARN: ``cursor.rowcount`` reports how many rows the last
+            # statement affected. Handy for "swept N stale batches" logs.
             return cur.rowcount
 
     # ------------------------------------------------------------------ writes
@@ -165,6 +238,11 @@ class ManifestDB:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
+                # LEARN: we translate the low-level sqlite3 error into
+                # our domain error (ManifestError). Callers handle ONE
+                # hierarchy (PipelineError) and never need to know
+                # sqlite3 exists. The ``from exc`` preserves the
+                # original traceback for debugging.
                 raise ManifestError(
                     f"batch_id already exists: {batch_id!r}"
                 ) from exc
@@ -216,6 +294,8 @@ class ManifestDB:
 
     def get_batch(self, batch_id: str) -> BatchRow | None:
         conn = self._require_conn()
+        # LEARN: ``execute(...).fetchone()`` runs the query and pulls
+        # one row. Returns ``None`` if the row does not exist.
         row = conn.execute(
             "SELECT batch_id, source_path, source_hash, source_mtime, status, "
             "rows_read, rows_written, bronze_path, started_at, finished_at, "
@@ -225,10 +305,16 @@ class ManifestDB:
         ).fetchone()
         if row is None:
             return None
+        # LEARN: ``BatchRow(**dict(row))`` is the "explode a dict into
+        # keyword arguments" idiom. ``dict(row)`` converts the
+        # ``sqlite3.Row`` to a real dict; ``**`` unpacks it so each key
+        # becomes a keyword argument to ``BatchRow``.
         return BatchRow(**dict(row))
 
     def is_batch_completed(self, batch_id: str) -> bool:
         batch = self.get_batch(batch_id)
+        # LEARN: short-circuit boolean — if ``batch is None``, the
+        # second expression is never evaluated (avoids AttributeError).
         return batch is not None and batch.is_completed
 
     def delete_batch(self, batch_id: str) -> bool:
@@ -247,6 +333,9 @@ class ManifestDB:
     # ------------------------------------------------------------------ internals
 
     def _require_conn(self) -> sqlite3.Connection:
+        # LEARN: a "guard" method — call this before any read/write to
+        # make the "DB is not open" mistake a loud error instead of an
+        # obscure AttributeError down the line.
         if self._conn is None:
             raise ManifestError(
                 "ManifestDB connection is not open; use as a context manager "
@@ -254,19 +343,32 @@ class ManifestDB:
             )
         return self._conn
 
+    # LEARN: ``@contextmanager`` + a generator function = a reusable
+    # ``with`` block. Python enters the ``try`` before ``yield``,
+    # returns the yielded value to the caller, then resumes AFTER
+    # ``yield`` on exit (whether the caller raised or not).
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Cursor]:
         conn = self._require_conn()
         cur = conn.cursor()
         cur.execute("BEGIN;")
         try:
+            # LEARN: the value after ``yield`` becomes what the caller
+            # receives via ``with ... as cur:``.
             yield cur
         except Exception:
+            # LEARN: if the ``with`` body raised, roll the transaction
+            # back so partial writes disappear. The bare ``raise``
+            # re-raises the original exception with its traceback.
             cur.execute("ROLLBACK;")
             raise
         else:
+            # LEARN: ``else`` on a try/except runs only when no
+            # exception fired. We commit only on the happy path.
             cur.execute("COMMIT;")
         finally:
+            # LEARN: ``finally`` always runs — closes the cursor no
+            # matter what, preventing resource leaks.
             cur.close()
 
     def _update_status(
@@ -295,11 +397,16 @@ class ManifestDB:
         # later partial update never erases progress recorded earlier in the run.
         if clear_error_fields:
             error_clause = "error_type = NULL, error_message = NULL"
+            # LEARN: ``tuple[object, ...]`` types a variable-length tuple
+            # of any types. Empty tuple ``()`` is valid.
             error_params: tuple[object, ...] = ()
         else:
             error_clause = "error_type = ?, error_message = ?"
             error_params = (error_type, error_message)
 
+        # LEARN: Python implicitly concatenates adjacent string literals
+        # inside parentheses (no ``+`` needed). ``f"..." "literal"``
+        # works too. Keeps multi-line SQL readable.
         sql = (
             "UPDATE batches SET status = ?, finished_at = ?, duration_ms = ?, "
             "rows_read = COALESCE(?, rows_read), "
@@ -308,6 +415,9 @@ class ManifestDB:
             f"{error_clause} "
             "WHERE batch_id = ?;"
         )
+        # LEARN: ``*error_params`` unpacks the tuple into this position.
+        # The ``params`` tuple is the ordered sequence of values bound
+        # to the ``?`` placeholders in ``sql``.
         params: tuple[object, ...] = (
             status,
             finished_at,
@@ -332,4 +442,7 @@ class ManifestDB:
 
 def _utcnow_iso() -> str:
     """Return the current UTC timestamp as an ISO-8601 string (seconds resolution)."""
+    # LEARN: ``datetime.now(tz=UTC)`` returns a timezone-aware ``datetime``.
+    # ``strftime`` formats it. ``Z`` at the end is the ISO-8601 marker
+    # for UTC ("Zulu time") — preferred over ``+00:00`` in logs.
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
