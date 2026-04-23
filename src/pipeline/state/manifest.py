@@ -37,6 +37,12 @@ from pipeline.schemas.manifest import (
     BATCH_STATUS_FAILED,
     BATCH_STATUS_IN_PROGRESS,
     BATCH_STATUSES,
+    RUN_LAYERS,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_IN_PROGRESS,
+    RUN_STATUSES,
+    RUNS_MIGRATIONS,
 )
 
 STALE_ERROR_TYPE: str = "StaleInProgress"
@@ -81,6 +87,38 @@ class BatchRow:
     @property
     def is_failed(self) -> bool:
         return self.status == BATCH_STATUS_FAILED
+
+
+# LEARN: ``RunRow`` mirrors the ``runs`` table introduced for F1 and
+# grown for F2. One row per attempt at a layer transform (Bronze ingest,
+# Silver build, Gold build). Silver populates ``rows_deduped`` and
+# ``output_path``; Bronze leaves them null (its output path lives on
+# ``batches.bronze_path``).
+@dataclass(frozen=True, slots=True)
+class RunRow:
+    """Typed projection of one row from the ``runs`` table."""
+
+    run_id: str
+    batch_id: str
+    layer: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    duration_ms: int | None
+    rows_in: int | None
+    rows_out: int | None
+    rows_deduped: int | None
+    output_path: str | None
+    error_type: str | None
+    error_message: str | None
+
+    @property
+    def is_completed(self) -> bool:
+        return self.status == RUN_STATUS_COMPLETED
+
+    @property
+    def is_failed(self) -> bool:
+        return self.status == RUN_STATUS_FAILED
 
 
 class ManifestDB:
@@ -148,6 +186,12 @@ class ManifestDB:
         # the wrong moment would block future runs from reusing that
         # batch_id (primary-key collision).
         self.reset_stale()
+        # LEARN: the same idea applies one level deeper: ``runs`` rows
+        # stuck in IN_PROGRESS belong to a crashed Silver/Gold run. We
+        # flip them to FAILED so the retry path in
+        # ``cli/silver.py`` -> ``delete_runs_for`` does not surprise
+        # operators with a dangling "half-done" row.
+        self.reset_stale_runs()
         return self
 
     def close(self) -> None:
@@ -174,6 +218,18 @@ class ManifestDB:
             # call idempotent — safe to run on every open.
             for stmt in ALL_DDL:
                 cur.execute(stmt)
+            # LEARN: SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT
+            # EXISTS``, so we diff by hand. ``PRAGMA table_info(runs)``
+            # returns one row per existing column (name at index 1). We
+            # build a set of current names, then run only the ``ADD
+            # COLUMN`` statements whose target column is missing. Safe
+            # on fresh DBs (CREATE TABLE already has the columns → no
+            # migration fires) and on F1 DBs (CREATE is no-op, ALTER
+            # fires for every missing column).
+            existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(runs);")}
+            for column_name, alter_sql in RUNS_MIGRATIONS:
+                if column_name not in existing_cols:
+                    cur.execute(alter_sql)
 
     def reset_stale(self, *, now_iso: str | None = None) -> int:
         """Mark orphaned ``IN_PROGRESS`` batches as ``FAILED``.
@@ -330,6 +386,186 @@ class ManifestDB:
             cur.execute("DELETE FROM batches WHERE batch_id = ?;", (batch_id,))
             return cur.rowcount > 0
 
+    # ------------------------------------------------------------------ runs
+
+    def reset_stale_runs(
+        self,
+        *,
+        now_iso: str | None = None,
+        layer: str | None = None,
+    ) -> int:
+        """Mark orphaned ``IN_PROGRESS`` runs as ``FAILED``.
+
+        Mirror of :meth:`reset_stale` but for the ``runs`` table. Called
+        from :meth:`open` on every startup. ``layer`` narrows the sweep
+        to one layer when set; ``None`` sweeps all layers.
+        """
+        if layer is not None:
+            self._require_layer(layer)
+        finished_at = now_iso if now_iso is not None else _utcnow_iso()
+        with self._transaction() as cur:
+            if layer is None:
+                cur.execute(
+                    "UPDATE runs SET status = ?, finished_at = ?, "
+                    "error_type = ?, error_message = ? "
+                    "WHERE status = ?;",
+                    (
+                        RUN_STATUS_FAILED,
+                        finished_at,
+                        STALE_ERROR_TYPE,
+                        STALE_ERROR_MESSAGE,
+                        RUN_STATUS_IN_PROGRESS,
+                    ),
+                )
+            else:
+                cur.execute(
+                    "UPDATE runs SET status = ?, finished_at = ?, "
+                    "error_type = ?, error_message = ? "
+                    "WHERE status = ? AND layer = ?;",
+                    (
+                        RUN_STATUS_FAILED,
+                        finished_at,
+                        STALE_ERROR_TYPE,
+                        STALE_ERROR_MESSAGE,
+                        RUN_STATUS_IN_PROGRESS,
+                        layer,
+                    ),
+                )
+            return cur.rowcount
+
+    def insert_run(
+        self,
+        *,
+        run_id: str,
+        batch_id: str,
+        layer: str,
+        started_at: str,
+    ) -> None:
+        """Create a new run row in ``IN_PROGRESS`` state.
+
+        ``run_id`` is caller-generated (typically the same short UUID
+        that shows up in structlog events) — this lets the CLI log lines
+        and the DB row share a single correlation id.
+        """
+        self._require_layer(layer)
+        with self._transaction() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO runs (run_id, batch_id, layer, status, started_at) "
+                    "VALUES (?, ?, ?, ?, ?);",
+                    (run_id, batch_id, layer, RUN_STATUS_IN_PROGRESS, started_at),
+                )
+            except sqlite3.IntegrityError as exc:
+                # LEARN: a run_id collision OR a missing batch_id (FK
+                # violation) both land here. We translate the raw
+                # sqlite3 error into our domain error so callers handle
+                # ONE hierarchy (PipelineError).
+                raise ManifestError(
+                    f"failed to insert run {run_id!r} for batch {batch_id!r}: {exc}"
+                ) from exc
+
+    def mark_run_completed(
+        self,
+        *,
+        run_id: str,
+        finished_at: str,
+        duration_ms: int,
+        rows_in: int | None = None,
+        rows_out: int | None = None,
+        rows_deduped: int | None = None,
+        output_path: str | None = None,
+    ) -> None:
+        """Flip a run to COMPLETED and record its metrics."""
+        self._update_run_status(
+            run_id=run_id,
+            status=RUN_STATUS_COMPLETED,
+            finished_at=finished_at,
+            duration_ms=duration_ms,
+            rows_in=rows_in,
+            rows_out=rows_out,
+            rows_deduped=rows_deduped,
+            output_path=output_path,
+            error_type=None,
+            error_message=None,
+            clear_error_fields=True,
+        )
+
+    def mark_run_failed(
+        self,
+        *,
+        run_id: str,
+        finished_at: str,
+        duration_ms: int,
+        error_type: str,
+        error_message: str,
+    ) -> None:
+        """Flip a run to FAILED and record the error cause."""
+        self._update_run_status(
+            run_id=run_id,
+            status=RUN_STATUS_FAILED,
+            finished_at=finished_at,
+            duration_ms=duration_ms,
+            error_type=error_type,
+            error_message=error_message,
+            clear_error_fields=False,
+        )
+
+    def get_run(self, run_id: str) -> RunRow | None:
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT run_id, batch_id, layer, status, started_at, finished_at, "
+            "duration_ms, rows_in, rows_out, rows_deduped, output_path, "
+            "error_type, error_message "
+            "FROM runs WHERE run_id = ?;",
+            (run_id,),
+        ).fetchone()
+        return None if row is None else RunRow(**dict(row))
+
+    def get_latest_run(self, *, batch_id: str, layer: str) -> RunRow | None:
+        """Return the most recently started run for ``(batch_id, layer)``.
+
+        "Most recent" is by ``started_at`` DESC; ties break on ``rowid``
+        so the answer is deterministic even when two runs share an ISO
+        timestamp (seconds resolution).
+        """
+        self._require_layer(layer)
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT run_id, batch_id, layer, status, started_at, finished_at, "
+            "duration_ms, rows_in, rows_out, rows_deduped, output_path, "
+            "error_type, error_message "
+            "FROM runs WHERE batch_id = ? AND layer = ? "
+            "ORDER BY started_at DESC, rowid DESC LIMIT 1;",
+            (batch_id, layer),
+        ).fetchone()
+        return None if row is None else RunRow(**dict(row))
+
+    def is_run_completed(self, *, batch_id: str, layer: str) -> bool:
+        """True when ``(batch_id, layer)`` has at least one COMPLETED run."""
+        self._require_layer(layer)
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT 1 FROM runs WHERE batch_id = ? AND layer = ? AND status = ? "
+            "LIMIT 1;",
+            (batch_id, layer, RUN_STATUS_COMPLETED),
+        ).fetchone()
+        return row is not None
+
+    def delete_runs_for(self, *, batch_id: str, layer: str) -> int:
+        """Delete every run row for ``(batch_id, layer)``. Returns the deleted count.
+
+        Used by the retry path in Silver (and later Gold): stale
+        ``IN_PROGRESS`` / ``FAILED`` rows are wiped before a new
+        ``insert_run`` so the operator can simply re-run the CLI.
+        """
+        self._require_layer(layer)
+        with self._transaction() as cur:
+            cur.execute(
+                "DELETE FROM runs WHERE batch_id = ? AND layer = ?;",
+                (batch_id, layer),
+            )
+            return cur.rowcount
+
     # ------------------------------------------------------------------ internals
 
     def _require_conn(self) -> sqlite3.Connection:
@@ -438,6 +674,80 @@ class ManifestDB:
                 ) from exc
             if cur.rowcount == 0:
                 raise ManifestError(f"no batch row to update: {batch_id!r}")
+
+    # ---- run-level helpers (mirror the batch-level ones above) --------
+
+    @staticmethod
+    def _require_layer(layer: str) -> None:
+        """Validate ``layer`` at the Python boundary instead of relying
+        only on the SQL CHECK constraint. Gives callers a clean
+        ``ManifestError`` before we round-trip to SQLite.
+        """
+        if layer not in RUN_LAYERS:
+            raise ManifestError(
+                f"invalid run layer {layer!r}; expected one of {RUN_LAYERS}"
+            )
+
+    def _update_run_status(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        finished_at: str,
+        duration_ms: int,
+        rows_in: int | None = None,
+        rows_out: int | None = None,
+        rows_deduped: int | None = None,
+        output_path: str | None = None,
+        error_type: str | None = None,
+        error_message: str | None = None,
+        clear_error_fields: bool = False,
+    ) -> None:
+        if status not in RUN_STATUSES:
+            raise ManifestError(
+                f"invalid run status {status!r}; expected one of {RUN_STATUSES}"
+            )
+        if clear_error_fields:
+            error_clause = "error_type = NULL, error_message = NULL"
+            error_params: tuple[object, ...] = ()
+        else:
+            error_clause = "error_type = ?, error_message = ?"
+            error_params = (error_type, error_message)
+
+        # LEARN: COALESCE keeps values recorded by a prior partial
+        # update. Useful for Silver where ``mark_run_completed`` is the
+        # single call that records rows_* and output_path — but the
+        # pattern keeps the door open for future multi-phase updates
+        # (e.g., a "dedup done, mask pending" partial update in F5).
+        sql = (
+            "UPDATE runs SET status = ?, finished_at = ?, duration_ms = ?, "
+            "rows_in = COALESCE(?, rows_in), "
+            "rows_out = COALESCE(?, rows_out), "
+            "rows_deduped = COALESCE(?, rows_deduped), "
+            "output_path = COALESCE(?, output_path), "
+            f"{error_clause} "
+            "WHERE run_id = ?;"
+        )
+        params: tuple[object, ...] = (
+            status,
+            finished_at,
+            duration_ms,
+            rows_in,
+            rows_out,
+            rows_deduped,
+            output_path,
+            *error_params,
+            run_id,
+        )
+        with self._transaction() as cur:
+            try:
+                cur.execute(sql, params)
+            except sqlite3.IntegrityError as exc:
+                raise ManifestError(
+                    f"integrity error updating run {run_id!r}: {exc}"
+                ) from exc
+            if cur.rowcount == 0:
+                raise ManifestError(f"no run row to update: {run_id!r}")
 
 
 def _utcnow_iso() -> str:
