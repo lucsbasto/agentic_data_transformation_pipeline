@@ -10,6 +10,7 @@ from typing import Any
 import polars as pl
 import pytest
 
+from pipeline.errors import LLMCallError
 from pipeline.llm.cache import LLMCache
 from pipeline.llm.client import LLMClient
 from pipeline.settings import Settings
@@ -143,6 +144,79 @@ def test_malformed_json_returns_null_dataclass(
     client, _fake = _client(settings, cache, [_fake_message("definitely not json {")])
     out = extract_entities_from_body("msg", client=client)
     assert out == ExtractedEntities.null()
+
+
+def test_missing_keys_json_returns_null_dataclass(
+    settings: Settings, cache: LLMCache
+) -> None:
+    """A payload lacking one or more of the six required keys must be
+    treated as invalid — we cannot patch a field we never saw without
+    inventing a value."""
+    partial = json.dumps({"veiculo_marca": "Fiat", "veiculo_modelo": "Uno"})
+    client, _fake = _client(settings, cache, [_fake_message(partial)])
+    out = extract_entities_from_body("msg", client=client)
+    assert out == ExtractedEntities.null()
+
+
+def test_bool_for_int_field_coerces_to_null(
+    settings: Settings, cache: LLMCache
+) -> None:
+    """``isinstance(True, int)`` is ``True`` in Python — the coercer
+    must reject a bool where an int is expected so ``veiculo_ano=1``
+    doesn't silently land in the data."""
+    payload = json.dumps(
+        {
+            "veiculo_marca": "Fiat",
+            "veiculo_modelo": "Uno",
+            "veiculo_ano": True,  # bool, not int
+            "concorrente_mencionado": None,
+            "valor_pago_atual_brl": None,
+            "sinistro_historico": None,
+        }
+    )
+    client, _fake = _client(settings, cache, [_fake_message(payload)])
+    out = extract_entities_from_body("msg", client=client)
+    assert out.veiculo_marca == "Fiat"
+    assert out.veiculo_ano is None
+
+
+def test_unexpected_exception_from_client_nulls_row(
+    settings: Settings, cache: LLMCache
+) -> None:
+    """Any non-LLMCallError leaking through the client must null this
+    row's entities rather than crash the batch."""
+
+    class _RuntimeError(RuntimeError):
+        pass
+
+    client, _fake = _client(settings, cache, [_RuntimeError("sdk shape bug")])
+    out = extract_entities_from_body("msg", client=client)
+    assert out == ExtractedEntities.null()
+
+
+def test_llm_call_error_mid_batch_keeps_batch_alive(
+    settings: Settings, cache: LLMCache
+) -> None:
+    """A provider failure on body #2 must null that row without
+    affecting body #1 or body #3."""
+    df = pl.DataFrame(
+        {
+            "message_body_masked": [
+                "quero cotar um Corolla",
+                "segundo corpo distinto",
+                "terceiro corpo distinto",
+            ]
+        }
+    )
+    responses = [
+        _fake_message(json.dumps(_GOOD_PAYLOAD)),
+        LLMCallError("provider hiccup"),
+        _fake_message(json.dumps(_GOOD_PAYLOAD)),
+    ]
+    client, fake = _client(settings, cache, responses)
+    out = apply_llm_extraction(df, client=client)
+    assert len(fake.messages.calls) == 3
+    assert out["veiculo_marca"].to_list() == ["Toyota", None, "Toyota"]
 
 
 # ---------------------------------------------------------------------------

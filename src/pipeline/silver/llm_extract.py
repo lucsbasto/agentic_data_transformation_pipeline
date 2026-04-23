@@ -32,6 +32,7 @@ rows get null entity columns, which analytics can filter on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Final
@@ -41,6 +42,18 @@ import polars as pl
 from pipeline.errors import LLMCallError
 from pipeline.llm.client import LLMClient
 from pipeline.logging import get_logger
+
+
+def _body_hash(body: str) -> str:
+    """Return a 16-char SHA-256 prefix of ``body``.
+
+    Used in structured log fields instead of a raw body slice — the
+    masked body is best-effort PII-free but the LLM response text
+    echoed alongside it is not, so we keep only an opaque identifier
+    that lets operators correlate log lines without leaking content
+    into aggregators.
+    """
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 # LEARN: ``PROMPT_VERSION`` is embedded in :data:`SYSTEM_PROMPT` below so
 # the SHA-256 cache key (model + system + user + …) naturally busts when
@@ -63,9 +76,14 @@ SYSTEM_PROMPT: Final[str] = (
     "stated.\n"
     '- "concorrente_mencionado" (string | null): name of a competing '
     "insurer if the lead mentions one.\n"
-    '- "valor_pago_atual_brl" (number | null): BRL amount the lead '
-    "currently pays for insurance, as a number "
-    "(no currency symbol).\n"
+    '- "valor_pago_atual_brl" (number | null): BRL amount the LEAD '
+    "(customer) explicitly says they currently pay to their EXISTING "
+    "insurer, as a number (no currency symbol). Return null when the "
+    "figure comes from the agent/seller quoting or offering a new "
+    "price (e.g. 'consigo fazer por R$ X', 'fica R$ X', 'posso "
+    "abaixar pra R$ X', 'plano básico R$ X/ano'). Return null when "
+    "it is unclear whether the figure is a current lead-paid premium "
+    "versus a quoted or discounted offer.\n"
     '- "sinistro_historico" (boolean | null): true if the lead '
     "explicitly states a prior accident or claim, false if they "
     "explicitly deny one, null otherwise.\n\n"
@@ -115,10 +133,33 @@ def extract_entities_from_body(
         logger.warning(
             "llm.extraction.failed",
             error=str(exc),
-            body_preview=body[:200],
+            body_hash=_body_hash(body),
+            body_len=len(body),
         )
         return ExtractedEntities.null()
-    return _parse_response(response.text, body=body)
+    # LEARN: LLMClient is documented to raise only LLMCallError, but a
+    # parser edge case (unexpected .text / .usage / .content shape, a
+    # future SDK change, a bug) can still leak through. Catching those
+    # here keeps the Silver batch alive: one row's entities go null
+    # instead of the entire run crashing with an uncaught exception.
+    except Exception as exc:
+        logger.exception(
+            "llm.extraction.unexpected",
+            error_type=type(exc).__name__,
+            body_hash=_body_hash(body),
+            body_len=len(body),
+        )
+        return ExtractedEntities.null()
+    try:
+        return _parse_response(response.text, body=body)
+    except Exception as exc:
+        logger.exception(
+            "llm.extraction.unexpected",
+            error_type=type(exc).__name__,
+            body_hash=_body_hash(body),
+            body_len=len(body),
+        )
+        return ExtractedEntities.null()
 
 
 def apply_llm_extraction(
@@ -172,22 +213,11 @@ def apply_llm_extraction(
             lookup[body] = ExtractedEntities.null()
             skipped_bodies.add(body)
             continue
-        try:
-            response = client.cached_call(system=SYSTEM_PROMPT, user=body)
-        except LLMCallError as exc:
-            logger.warning(
-                "llm.extraction.failed",
-                error=str(exc),
-                body_preview=body[:200],
-            )
-            lookup[body] = ExtractedEntities.null()
-            # A failed round-trip still burned a call from the budget.
-            calls_made += 1
-            continue
-        lookup[body] = _parse_response(response.text, body=body)
-        input_tokens_total += response.input_tokens
-        output_tokens_total += response.output_tokens
-        if response.cache_hit:
+        entities, metrics = _call_and_parse(body, client=client, logger=logger)
+        lookup[body] = entities
+        input_tokens_total += metrics.input_tokens
+        output_tokens_total += metrics.output_tokens
+        if metrics.cache_hit:
             cache_hits += 1
         else:
             calls_made += 1
@@ -255,32 +285,105 @@ def apply_llm_extraction(
 
 
 # ---------------------------------------------------------------------------
+# Call + parse helper (keeps ``apply_llm_extraction`` under the ruff
+# ``PLR0915`` statement budget and centralises the "never let an
+# exception escape" contract).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _CallMetrics:
+    """Minimal metrics surface from one attempted LLM round-trip.
+
+    ``cache_hit`` stays ``False`` on every failure path so a null
+    result never silently flips the batch-level ``calls_made`` counter
+    from "charged" to "free".
+    """
+
+    input_tokens: int
+    output_tokens: int
+    cache_hit: bool
+
+
+_NULL_METRICS: Final[_CallMetrics] = _CallMetrics(0, 0, False)
+
+
+def _call_and_parse(
+    body: str, *, client: LLMClient, logger: Any
+) -> tuple[ExtractedEntities, _CallMetrics]:
+    """Run one ``cached_call`` + parse. Return null dataclass + null
+    metrics on any failure, never raise. Counts budget as a miss when
+    the provider round-tripped; keeps the Silver batch alive
+    regardless of parser / SDK edge cases."""
+    try:
+        response = client.cached_call(system=SYSTEM_PROMPT, user=body)
+    except LLMCallError as exc:
+        logger.warning(
+            "llm.extraction.failed",
+            error=str(exc),
+            body_hash=_body_hash(body),
+            body_len=len(body),
+        )
+        return ExtractedEntities.null(), _NULL_METRICS
+    except Exception as exc:
+        logger.exception(
+            "llm.extraction.unexpected",
+            error_type=type(exc).__name__,
+            body_hash=_body_hash(body),
+            body_len=len(body),
+        )
+        return ExtractedEntities.null(), _NULL_METRICS
+    try:
+        entities = _parse_response(response.text, body=body)
+    except Exception as exc:
+        logger.exception(
+            "llm.extraction.unexpected",
+            error_type=type(exc).__name__,
+            body_hash=_body_hash(body),
+            body_len=len(body),
+        )
+        entities = ExtractedEntities.null()
+    metrics = _CallMetrics(
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        cache_hit=response.cache_hit,
+    )
+    return entities, metrics
+
+
+# ---------------------------------------------------------------------------
 # JSON parsing helpers.
 # ---------------------------------------------------------------------------
 
 
 def _parse_response(text: str, *, body: str) -> ExtractedEntities:
     logger = get_logger("pipeline.silver.llm")
+    body_hash = _body_hash(body)
+    body_len = len(body)
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
-            response_preview=text[:200],
+            body_hash=body_hash,
+            body_len=body_len,
+            response_len=len(text),
+            reason="json_decode_error",
         )
         return ExtractedEntities.null()
     if not isinstance(payload, dict):
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
+            body_hash=body_hash,
+            body_len=body_len,
             reason="not_an_object",
         )
         return ExtractedEntities.null()
     if any(k not in payload for k in _REQUIRED_FIELDS):
         logger.warning(
             "llm.extraction.invalid_json",
-            body_preview=body[:200],
+            body_hash=body_hash,
+            body_len=body_len,
             reason="missing_fields",
         )
         return ExtractedEntities.null()
