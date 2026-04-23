@@ -93,3 +93,29 @@ Scope: commits `2c3d2f2` and `f4fe25d`.
 | 7 | Later-pain | critic | `LLMResponse` positional construction will break when F1.7 adds fields | **Fixed** — dataclass now `kw_only=True` |
 | 8 | Nitpick | critic | TOCTOU race on `is_batch_completed` → `insert_batch` under concurrent processes | **Accepted** — SQLite PK + `reset_stale` makes the second process crash loudly rather than corrupt; M1 is single-operator anyway |
 | 9 | Nitpick | critic | Real 153K-row parquet never exercised before F1.8 | **Scheduled** — F1.8 smoke run executes the CLI against `data/raw/conversations_bronze.parquet` and records timing in STATE.md |
+
+## F1.7 (LLMCache + LLMClient, 2026-04-22 → 2026-04-23)
+
+Scope: commits `a5f7b00` (cache) and `515e0da` (client).
+
+| Source | Report |
+|---|---|
+| code-reviewer | [F1.7-code-review.md](./F1.7-code-review.md) |
+| security-reviewer | [F1.7-security.md](./F1.7-security.md) |
+| critic | [F1.7-critic.md](./F1.7-critic.md) |
+
+### Consolidated severity and disposition
+
+| # | Severity | Source | Finding | Disposition |
+|---|---|---|---|---|
+| 1 | High | code-reviewer | Cache-key divergence on `-0.0` vs `0.0` — `f"{-0.0:.6f}"` produces `"-0.000000"` | **Fixed** — added `temperature + 0.0` normalization and a regression test |
+| 2 | Medium | code-reviewer | `_AnthropicLike.messages: Any` defeats Protocol type checking | **Fixed** — introduced nested `_MessagesLike(Protocol)` with a typed `create()` |
+| 3 | Medium | code-reviewer | `INSERT OR IGNORE` silently drops token-count corrections | **Fixed** — docstring now explicitly states the "first write wins" contract and points callers at `invalidate` to replace |
+| 4 | Medium | security | `invalidate(prefix=)` does not escape LIKE metacharacters (`%`, `_`) | **Fixed** — prefix is now escaped and the LIKE uses `ESCAPE '\\'`; regression test covers `%` and `_` prefixes |
+| 5 | Medium | security | Cache-as-oracle — SQLite row is trusted without an integrity check | **Accepted** — DB is local-only, `pipeline_state_db` blocks `..` traversal; HMAC hardening pass can wait |
+| 6 | Low | security | `_first_text_block` returns raw provider text, no length cap or control-char strip | **Accepted** — structlog `JSONRenderer` encodes control chars when logging; cache stores raw for replay fidelity |
+| 7 | Low | security | `LLMCache` opens without WAL pragma | **Fixed** — `PRAGMA journal_mode=WAL` on non-`:memory:` connections |
+| 8 | Later-pain | critic | Retry budget = 3 means 4 SDK attempts (3 primary + 1 fallback); operator cost model needs to know | **Accepted** — documented in the client docstring; F4 agent-loop will surface this in the cost log |
+| 9 | Later-pain | critic | Fallback response is cached under the *primary* model's key — an explicit `model=fallback` re-call would miss | **Accepted** — intended: the cache replays what the caller asked for, not what the SDK actually served |
+| 10 | Later-pain | critic | Empty-text response (tool-use-only) silently cached | **Fixed** — `_one_call` now raises `LLMCallError` instead of caching an empty response; regression test added |
+| 11 | Nitpick | critic | `FakeAnthropic.messages.create` accepts any kwargs — SDK signature changes would pass CI silently | **Accepted** — the Protocol catches the first layer of drift; full SDK-contract tests belong in F1.8 smoke run |

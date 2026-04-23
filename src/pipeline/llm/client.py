@@ -52,6 +52,12 @@ _FATAL_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
+class _MessagesLike(Protocol):
+    """Shape of the ``messages`` attribute on the Anthropic client."""
+
+    def create(self, **kwargs: Any) -> Any: ...
+
+
 class _AnthropicLike(Protocol):
     """Subset of the Anthropic SDK that :class:`LLMClient` relies on.
 
@@ -59,7 +65,7 @@ class _AnthropicLike(Protocol):
     structurally compatible fake without subclassing ``Anthropic``.
     """
 
-    messages: Any
+    messages: _MessagesLike
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -288,6 +294,11 @@ class LLMClient:
         latency_ms = int((time.monotonic() - started) * 1000)
 
         text = _first_text_block(message)
+        if not text:
+            raise LLMCallError(
+                f"LLM returned no text block (model={model!r}, attempt={attempt}); "
+                "refusing to cache an empty response"
+            )
         usage = getattr(message, "usage", None)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)

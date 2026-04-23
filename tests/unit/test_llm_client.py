@@ -218,6 +218,17 @@ def test_response_usage_fields_populated(
     assert result.output_tokens == 7
 
 
+def test_empty_text_response_raises(settings: Settings, cache: LLMCache) -> None:
+    """A provider reply with no text block must not be cached as an empty hit."""
+    empty_message = SimpleNamespace(
+        content=[SimpleNamespace(nope="no text")],  # no .text attribute
+        usage=SimpleNamespace(input_tokens=1, output_tokens=0),
+    )
+    client, _fake = _make_client(settings, cache, [empty_message])
+    with pytest.raises(LLMCallError, match="no text block"):
+        client.cached_call(system="s", user="u")
+
+
 def test_construction_with_default_anthropic(
     settings: Settings, cache: LLMCache, monkeypatch: pytest.MonkeyPatch
 ) -> None:

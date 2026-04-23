@@ -43,14 +43,20 @@ def compute_cache_key(
     max_tokens: int,
     temperature: float,
 ) -> str:
-    """Stable sha256 key for a request signature."""
+    """Stable sha256 key for a request signature.
+
+    Temperature is normalized with ``+ 0.0`` so that a caller passing
+    ``-0.0`` hashes to the same key as ``0.0`` — ``f"{-0.0:.6f}"``
+    produces ``"-0.000000"`` in Python, which would otherwise leak a
+    separate cache bucket for a semantically identical request.
+    """
     payload = "\n".join(
         [
             f"model={model}",
             f"system={system}",
             f"user={user}",
             f"max_tokens={max_tokens}",
-            f"temperature={temperature:.6f}",
+            f"temperature={temperature + 0.0:.6f}",
         ]
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -78,6 +84,8 @@ class LLMCache:
             target = self._db_path
         conn = sqlite3.connect(target, isolation_level=None)
         conn.row_factory = sqlite3.Row
+        if target != ":memory:":
+            conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute(LLM_CACHE_DDL)
         self._conn = conn
         return self
@@ -113,8 +121,15 @@ class LLMCache:
         input_tokens: int,
         output_tokens: int,
     ) -> None:
-        """Insert a new row. A duplicate key is a no-op — the cache never
-        overwrites, so replays remain deterministic."""
+        """Insert a new row.
+
+        Uses ``INSERT OR IGNORE`` by design: once a key is stored, the
+        row is frozen. Even if a later network call reports different
+        token counts or latency, the stored values represent the *first*
+        observed response and stay canonical. Callers who need to replace
+        a poisoned row must call :meth:`invalidate` with the prefix and
+        re-store.
+        """
         conn = self._require_conn()
         conn.execute(
             "INSERT OR IGNORE INTO llm_cache "
@@ -131,18 +146,23 @@ class LLMCache:
         )
 
     def invalidate(self, *, prefix: str | None = None) -> int:
-        """Delete rows whose `cache_key` starts with ``prefix``.
+        """Delete rows whose ``cache_key`` starts with ``prefix``.
 
         ``None`` clears the entire cache — use only to force a full re-run.
-        Returns the number of rows deleted.
+        Returns the number of rows deleted. The prefix is run through a
+        LIKE query after escaping SQL-LIKE metacharacters (``%`` and
+        ``_``); otherwise a caller passing ``"%"`` would clear everything.
         """
         conn = self._require_conn()
         if prefix is None:
             cur = conn.execute("DELETE FROM llm_cache;")
         else:
+            safe = (
+                prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
             cur = conn.execute(
-                "DELETE FROM llm_cache WHERE cache_key LIKE ?;",
-                (f"{prefix}%",),
+                "DELETE FROM llm_cache WHERE cache_key LIKE ? ESCAPE '\\';",
+                (f"{safe}%",),
             )
         return cur.rowcount
 

@@ -41,6 +41,16 @@ def test_compute_cache_key_is_deterministic() -> None:
     assert len(a) == 64  # sha256 hex
 
 
+def test_compute_cache_key_normalizes_negative_zero() -> None:
+    positive = compute_cache_key(
+        model="m", system="s", user="u", max_tokens=100, temperature=0.0
+    )
+    negative = compute_cache_key(
+        model="m", system="s", user="u", max_tokens=100, temperature=-0.0
+    )
+    assert positive == negative
+
+
 def test_compute_cache_key_differs_per_field() -> None:
     base = {"model": "m", "system": "s", "user": "u", "max_tokens": 100, "temperature": 0.0}
     ref = compute_cache_key(**base)
@@ -103,6 +113,19 @@ def test_invalidate_prefix(cache: LLMCache) -> None:
     assert removed == 2
     assert cache.get("abc1") is None
     assert cache.get("xyz") is not None
+
+
+def test_invalidate_prefix_escapes_like_metacharacters(cache: LLMCache) -> None:
+    _put(cache, "abc1")
+    _put(cache, "xyz")
+    # A caller passing a metacharacter must not accidentally widen the match.
+    removed = cache.invalidate(prefix="%")
+    assert removed == 0
+    assert cache.get("abc1") is not None
+    assert cache.get("xyz") is not None
+    removed_under = cache.invalidate(prefix="_bc1")
+    assert removed_under == 0
+    assert cache.get("abc1") is not None
 
 
 def test_requires_open_connection() -> None:
