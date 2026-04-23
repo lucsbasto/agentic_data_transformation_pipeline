@@ -52,13 +52,31 @@ Memória persistente entre sessões. Curta e mutável. Não é log; é contexto 
 
 ## Sessão atual
 
-- Iniciada: 2026-04-22
-- Foco: Phase 0 (init) → preparar F1.
+- Iniciada: 2026-04-22 (continuada em 2026-04-23).
+- Foco: Phase 0 (init) → F1 foundation completa.
 - Marcos da sessão:
   - ROADMAP validado.
   - Git repo inicializado + remote configurado.
   - `.gitignore` + `.env.example` criados.
   - STATE.md revisado (D-002 repontado pra DashScope; D-008/D-009/D-010 adicionados).
   - Skills de projeto criadas em `.claude/skills/` (python, polars, llm-client, agent-loop, medallion).
-- Próximo: atomic commits → iniciar F1 Design.
-- Tasks ativos: ver TaskList do orquestrador.
+  - F1.1 → F1.7 shipped: pyproject/uv bootstrap, settings+logging+errors+paths, Bronze+manifest schemas, ManifestDB with crash recovery, ingest pipeline (scan/transform/write), click CLI, LLMCache, LLMClient w/ retries+fallback.
+  - Three-agent review lane per task (code-reviewer + security-reviewer + critic); every wave's findings triaged in `.specs/features/F1/REVIEWS/INDEX.md`.
+  - 110 tests green, coverage 96%, ruff + mypy strict clean.
+
+## F1.8 smoke run (real parquet, 2026-04-23)
+
+Measured against `data/raw/conversations_bronze.parquet` (8.7 MB, 153,228 rows):
+
+- Command: `uv run python -m pipeline ingest`.
+- First run:
+  - `run_id=d581b35692b4`
+  - `batch_id=d287cbb50cc3`
+  - `source_hash=b2a6dacd57158a6d0f19a3edcce25c3a6b8cab52afa419fd52934ec4a0b196eb`
+  - `rows_written=153228`
+  - `duration_ms=322` (scan → Enum cast → lineage cols → zstd parquet write → re-scan roundtrip → manifest COMPLETED).
+  - Output: `data/bronze/batch_id=d287cbb50cc3/part-0.parquet`, **4.2 MB** (~52% compression ratio vs raw source).
+- Second run (idempotency):
+  - short-circuited via `ingest.skip.already_completed`; no new Bronze write, no manifest mutation.
+- Budget for full load (M2 target): <15 min. Bronze alone at 322 ms is comfortably inside the envelope — the budget headroom goes to the Silver LLM enrichment in F2/F3.
+- Next: F1.9 final review agent pass, then close M1.
