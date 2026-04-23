@@ -1,20 +1,25 @@
-"""Entry point for `python -m pipeline`."""
+"""Entry point for ``python -m pipeline``."""
 
 from __future__ import annotations
 
-import sys
+import click
+
+from pipeline.cli.ingest import ingest
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI dispatch. Real subcommands land in pipeline/cli/ (see F1.6)."""
-    args = sys.argv[1:] if argv is None else argv
-    if not args:
-        print("usage: python -m pipeline <subcommand> [options]", file=sys.stderr)
-        print("subcommands: (none registered yet)", file=sys.stderr)
-        return 2
-    sys.stderr.write(f"unknown subcommand: {args[0]}\n")
-    return 2
+@click.group(name="pipeline")
+@click.version_option(package_name="agentic-data-pipeline")
+def cli() -> None:
+    """Agentic data transformation pipeline (Bronze → Silver → Gold)."""
+
+
+cli.add_command(ingest)
+
+
+def main() -> None:
+    """Script entrypoint (invoked via ``python -m pipeline`` or the console script)."""
+    cli(standalone_mode=True)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
