@@ -27,6 +27,7 @@ from typing import Literal
 import polars as pl
 
 from pipeline.errors import SilverError
+from pipeline.silver.quarantine import REJECTED_SCHEMA
 from pipeline.silver.transform import assert_silver_schema
 
 _COMPRESSION: Literal["zstd"] = "zstd"
@@ -88,4 +89,74 @@ def write_silver(
     return SilverWriteResult(silver_path=final_file, rows_written=rows_written)
 
 
-__all__ = ["SilverWriteResult", "write_silver"]
+@dataclass(frozen=True, slots=True)
+class RejectedWriteResult:
+    """Outcome of a single quarantine partition write."""
+
+    rejected_path: Path
+    rows_written: int
+
+
+def write_rejected(
+    df: pl.DataFrame,
+    *,
+    silver_root: Path,
+    batch_id: str,
+) -> RejectedWriteResult:
+    """Write quarantined rows to ``silver_root/batch_id=<id>/rejected/part-0.parquet``.
+
+    Reuses the same atomic temp-dir + swap pattern as ``write_silver``
+    but lives in its own partition subdir (``rejected/``) so operators
+    can ``grep`` or ``ls`` to triage a batch without wading through
+    valid Silver rows. Schema is re-asserted against
+    :data:`REJECTED_SCHEMA` so a future bug in the quarantine pipeline
+    crashes loudly at the write boundary.
+    """
+    if df.schema != REJECTED_SCHEMA:
+        raise SilverError(
+            "rejected schema mismatch: expected REJECTED_SCHEMA, "
+            f"got {df.schema}"
+        )
+
+    silver_root.mkdir(parents=True, exist_ok=True)
+    # LEARN: ``rejected/`` lives INSIDE the same ``batch_id=<id>``
+    # directory as the valid Silver parquet. That keeps a run's
+    # outputs co-located under one partition root; operators do
+    # ``ls silver/batch_id=<id>/`` and see both lanes at once.
+    final_dir = silver_root / f"batch_id={batch_id}" / "rejected"
+    tmp_dir = silver_root / f"batch_id={batch_id}" / ".tmp-rejected"
+
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=False)
+
+    tmp_file = tmp_dir / "part-0.parquet"
+    final_file = final_dir / "part-0.parquet"
+
+    try:
+        df.write_parquet(tmp_file, compression=_COMPRESSION, statistics=True)
+        if final_dir.exists():
+            shutil.rmtree(final_dir)
+        tmp_dir.replace(final_dir)
+    except Exception as exc:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise SilverError(
+            f"failed to write quarantine partition for batch {batch_id!r}: {exc}"
+        ) from exc
+
+    rows_written = pl.scan_parquet(final_file).select(pl.len()).collect().item()
+    if rows_written != df.height:
+        raise SilverError(
+            f"Quarantine write roundtrip mismatch: wrote {df.height} rows, "
+            f"read back {rows_written} for batch {batch_id!r}"
+        )
+
+    return RejectedWriteResult(rejected_path=final_file, rows_written=rows_written)
+
+
+__all__ = [
+    "RejectedWriteResult",
+    "SilverWriteResult",
+    "write_rejected",
+    "write_silver",
+]
