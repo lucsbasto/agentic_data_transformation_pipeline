@@ -69,3 +69,27 @@ Scope: commit `61989c1`.
 - Schema assertion at write time (`assert_bronze_schema`).
 - Comprehensive enum-rejection regression test.
 - All SQL parameter-bound; `SecretStr`/redaction processor upstream.
+
+## F1.6 (CLI + LLMClient stub, 2026-04-22)
+
+Scope: commits `2c3d2f2` and `f4fe25d`.
+
+| Source | Report |
+|---|---|
+| code-reviewer | [F1.6-code-review.md](./F1.6-code-review.md) |
+| security-reviewer | [F1.6-security.md](./F1.6-security.md) |
+| critic | [F1.6-critic.md](./F1.6-critic.md) |
+
+### Consolidated severity and disposition
+
+| # | Severity | Source | Finding | Disposition |
+|---|---|---|---|---|
+| 1 | Medium | code-reviewer | `LLMResponse` docstring said `cache_hit` was deferred to F1.7 but the field was already present | **Fixed** — rewrote docstring to name the F1.7 additions (`retry_count`, `cost_usd_estimate`, `actual_model_used`, `latency_ms`) and added `kw_only=True` so those additions do not break existing callers |
+| 2 | Medium | code-reviewer | `_run_ingest` at 87 lines exceeds the ~30-line skill target | **Accepted** — linear orchestration is cleanest to read in one place for M1; split when F4's agent loop reuses parts of it |
+| 3 | Low | code-reviewer | `standalone_mode=True` in `cli(...)` call is the click default | **Accepted** — explicit is louder than implicit for the one-person-team operator entry |
+| 4 | Low | security | `--bronze-root` accepts `..` segments and is not canonicalized before `mkdir` | **Deferred** — operator-controlled path in M1 scope; revisit if the CLI is ever exposed to untrusted operators |
+| 5 | Later-pain | critic | Non-`PipelineError` exceptions (PolarsError, OSError) bypass `mark_failed`, leaving orphan `IN_PROGRESS` rows and surfacing raw tracebacks | **Deferred** — `reset_stale` handles the orphan on next open; a broad `try/except Exception` around the ingest step can wait until we observe a real non-PipelineError in production logs |
+| 6 | Later-pain | critic | `delete_batch` drops the FAILED row's audit metadata instead of keeping history | **Deferred to M3** — `runs` table (already declared) will carry per-attempt history when the agent loop writes there |
+| 7 | Later-pain | critic | `LLMResponse` positional construction will break when F1.7 adds fields | **Fixed** — dataclass now `kw_only=True` |
+| 8 | Nitpick | critic | TOCTOU race on `is_batch_completed` → `insert_batch` under concurrent processes | **Accepted** — SQLite PK + `reset_stale` makes the second process crash loudly rather than corrupt; M1 is single-operator anyway |
+| 9 | Nitpick | critic | Real 153K-row parquet never exercised before F1.8 | **Scheduled** — F1.8 smoke run executes the CLI against `data/raw/conversations_bronze.parquet` and records timing in STATE.md |

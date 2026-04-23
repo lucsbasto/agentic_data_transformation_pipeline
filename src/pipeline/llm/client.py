@@ -25,12 +25,16 @@ from pipeline.errors import LLMError
 from pipeline.settings import Settings
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LLMResponse:
     """Structured result of a single LLM call.
 
-    Kept minimal in F1 — F1.7 extends this with per-call cache-hit flag,
-    retry count, cost estimate, and the model actually used after fallback.
+    ``kw_only=True`` is load-bearing: F1.7 will add ``retry_count``,
+    ``cost_usd_estimate``, ``actual_model_used``, and a ``latency_ms``
+    field (see ``.claude/skills/llm-client-anthropic-compat/SKILL.md``).
+    Forcing keyword construction now means existing call sites don't
+    break when those fields arrive — new callers fill them explicitly,
+    old callers keep working.
     """
 
     text: str
