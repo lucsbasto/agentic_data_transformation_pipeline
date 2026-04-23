@@ -28,7 +28,7 @@ Camadas Silver e Gold completas. Aqui mora a maior parte da lógica de IA.
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
 | **F2 — Silver transforms** | 🟡 spec'd (2026-04-23) | F1 | Large |
-| **F3 — Gold analytics + personas** | ⚪ blocked | F2 | Large |
+| **F3 — Gold analytics + personas** | 🟡 spec'd (2026-04-23) | F2 | Large |
 
 **Escopo F2 congelado:** dedup + normalize + PII mask positional + lead_id HMAC-SHA256 + manifest `silver_runs` + CLI `transform-silver --batch-id`. **Fora:** extração LLM (veículo/concorrente/sinistro) deslocada para F3. Spec/design/tasks em `.specs/features/F2/`.
 
