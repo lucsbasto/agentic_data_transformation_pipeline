@@ -167,6 +167,19 @@ def silver_transform(
             audio_confidence_expr(
                 pl.col("message_type"), pl.col("message_body")
             ).alias("audio_confidence"),
+            # LEARN: six placeholder columns for the LLM extraction
+            # lane. The CLI layer fills them by calling
+            # :func:`pipeline.silver.llm_extract.apply_llm_extraction`
+            # on the collected DataFrame — see the "Option A" decision
+            # in ``docs/f2-llm-handoff.md``. Typed null literals keep
+            # the SILVER_SCHEMA contract honored even when the LLM
+            # lane is skipped, times out, or exhausts its budget.
+            pl.lit(None, dtype=pl.String).alias("veiculo_marca"),
+            pl.lit(None, dtype=pl.String).alias("veiculo_modelo"),
+            pl.lit(None, dtype=pl.Int32).alias("veiculo_ano"),
+            pl.lit(None, dtype=pl.String).alias("concorrente_mencionado"),
+            pl.lit(None, dtype=pl.Float64).alias("valor_pago_atual_brl"),
+            pl.lit(None, dtype=pl.Boolean).alias("sinistro_historico"),
             pl.col("campaign_id"),
             pl.col("agent_id"),
             pl.col("direction"),

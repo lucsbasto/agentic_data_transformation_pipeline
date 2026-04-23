@@ -137,6 +137,21 @@ _SILVER_FIELDS: dict[str, pl.DataType] = {
     # ``audio_confidence != 'low'`` therefore do not accidentally drop
     # non-audio rows.
     "audio_confidence": pl.String(),
+    # --- LLM-extracted entities (F2, §6.2, RF-03) -----------------------------
+    # LEARN: these six columns are filled by
+    # :mod:`pipeline.silver.llm_extract` after the pure Polars
+    # transform runs. The transform itself seeds each row with
+    # ``null`` so :data:`SILVER_SCHEMA` stays the single source of
+    # truth — the column exists and has its declared dtype even if the
+    # LLM lane was skipped, exhausted its budget, or failed mid-batch.
+    # Analytics distinguish "LLM returned nothing for this row" from
+    # "the field does not apply" the same way: by filtering on null.
+    "veiculo_marca": pl.String(),
+    "veiculo_modelo": pl.String(),
+    "veiculo_ano": pl.Int32(),
+    "concorrente_mencionado": pl.String(),
+    "valor_pago_atual_brl": pl.Float64(),
+    "sinistro_historico": pl.Boolean(),
     # --- passthrough (Bronze -> Silver unchanged) -----------------------------
     "campaign_id": pl.String(),
     "agent_id": pl.String(),

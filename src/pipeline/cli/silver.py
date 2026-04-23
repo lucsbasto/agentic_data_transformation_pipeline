@@ -29,10 +29,13 @@ import click
 import polars as pl
 
 from pipeline.errors import PipelineError, SilverError
+from pipeline.llm.cache import LLMCache
+from pipeline.llm.client import LLMClient
 from pipeline.logging import bind_context, clear_context, configure_logging, get_logger
 from pipeline.paths import data_bronze_dir, data_silver_dir
 from pipeline.schemas.manifest import RUN_LAYER_SILVER
 from pipeline.settings import Settings
+from pipeline.silver.llm_extract import apply_llm_extraction
 from pipeline.silver.quarantine import partition_rows
 from pipeline.silver.transform import assert_silver_schema, silver_transform
 from pipeline.silver.writer import write_rejected, write_silver
@@ -175,14 +178,12 @@ def _run_silver(
             now = datetime.now(tz=UTC)
             valid_lf, rejected_lf = partition_rows(lf, rejected_at=now)
             rejected_df = rejected_lf.collect()
-            silver_lf = silver_transform(
+            df = _build_silver_frame(
                 valid_lf,
-                secret=settings.pipeline_lead_secret.get_secret_value(),
-                silver_batch_id=batch_id,
-                transformed_at=now,
+                settings=settings,
+                batch_id=batch_id,
+                now=now,
             )
-            df = silver_lf.collect()
-            assert_silver_schema(df)
             write_result = write_silver(
                 df, silver_root=silver_root, batch_id=batch_id
             )
@@ -260,6 +261,47 @@ def _run_silver(
         f"to {write_result.silver_path} "
         f"(run={run_id}, {duration_ms} ms)"
     )
+
+
+def _build_silver_frame(
+    valid_lf: pl.LazyFrame,
+    *,
+    settings: Settings,
+    batch_id: str,
+    now: datetime,
+) -> pl.DataFrame:
+    """Run the pure transform then the LLM enrichment, with a schema
+    assertion on either side. Extracted so :func:`_run_silver` stays
+    under the ruff ``PLR0915`` statement budget."""
+    silver_lf = silver_transform(
+        valid_lf,
+        secret=settings.pipeline_lead_secret.get_secret_value(),
+        silver_batch_id=batch_id,
+        transformed_at=now,
+    )
+    df = silver_lf.collect()
+    assert_silver_schema(df)
+    df = _enrich_with_llm(df, settings=settings)
+    assert_silver_schema(df)
+    return df
+
+
+def _enrich_with_llm(df: pl.DataFrame, *, settings: Settings) -> pl.DataFrame:
+    """Fill the six §6.2 LLM-extracted columns on the collected frame.
+
+    Lives outside :func:`_run_silver` so the orchestrator keeps a
+    readable top-level shape (ruff ``PLR0915`` guards against 50+
+    statement functions). The enrichment owns its own ``LLMCache``
+    context so the SQLite connection closes as soon as the batch is
+    done even if ``write_silver`` later raises.
+    """
+    with LLMCache(settings.state_db_path()) as llm_cache:
+        llm_client = LLMClient(settings, llm_cache)
+        return apply_llm_extraction(
+            df,
+            client=llm_client,
+            max_calls=settings.pipeline_llm_max_calls_per_batch,
+        )
 
 
 def _iso_now() -> str:

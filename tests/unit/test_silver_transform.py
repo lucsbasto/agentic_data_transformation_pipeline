@@ -268,6 +268,26 @@ def test_silver_transform_audio_confidence_is_null_for_text() -> None:
     assert out["audio_confidence"][0] is None
 
 
+def test_silver_transform_seeds_llm_columns_as_typed_nulls() -> None:
+    """The pure transform must leave every LLM-extracted column as
+    ``null`` with the schema-declared dtype, so the CLI's
+    ``apply_llm_extraction`` can replace them in place without dtype
+    drift.
+    """
+    lf = _bronze_frame([_bronze_row(message_body="oi tudo bem")])
+    out = _run_silver(lf)
+    for col, dtype in (
+        ("veiculo_marca", pl.String),
+        ("veiculo_modelo", pl.String),
+        ("veiculo_ano", pl.Int32),
+        ("concorrente_mencionado", pl.String),
+        ("valor_pago_atual_brl", pl.Float64),
+        ("sinistro_historico", pl.Boolean),
+    ):
+        assert out[col][0] is None, f"{col!r} should be null"
+        assert out.schema[col] == dtype, f"{col!r} dtype drifted"
+
+
 def test_silver_transform_masks_sender_phone() -> None:
     lf = _bronze_frame([_bronze_row(sender_phone="11987654321")])
     out = _run_silver(lf)

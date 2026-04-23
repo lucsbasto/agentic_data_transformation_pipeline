@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
@@ -11,12 +13,67 @@ from click.testing import CliRunner
 
 from pipeline.cli.ingest import ingest
 from pipeline.cli.silver import silver
+from pipeline.llm.client import LLMResponse
 from pipeline.schemas.bronze import BRONZE_SCHEMA
 from pipeline.schemas.silver import SILVER_SCHEMA
 from pipeline.silver.quarantine import REJECTED_SCHEMA
 from pipeline.state.manifest import ManifestDB
 
 pytestmark = pytest.mark.integration
+
+
+_NULL_LLM_PAYLOAD: str = json.dumps(
+    {
+        "veiculo_marca": None,
+        "veiculo_modelo": None,
+        "veiculo_ano": None,
+        "concorrente_mencionado": None,
+        "valor_pago_atual_brl": None,
+        "sinistro_historico": None,
+    }
+)
+
+
+class _StubLLMClient:
+    """Stand-in for :class:`pipeline.llm.client.LLMClient`.
+
+    Never touches the network. By default it returns an all-null JSON
+    payload — the six LLM-extracted columns end up null, which leaves
+    every unrelated assertion in the existing silver CLI tests
+    intact. A per-test :func:`monkeypatch.setattr` can replace this
+    with a stub that returns populated JSON to exercise the enrichment
+    path end-to-end.
+    """
+
+    payload: str = _NULL_LLM_PAYLOAD
+
+    def __init__(
+        self, settings: Any, cache: Any, **_kwargs: Any
+    ) -> None:
+        self.settings = settings
+        self.cache = cache
+
+    def cached_call(
+        self, *, system: str, user: str, **_kwargs: Any
+    ) -> LLMResponse:
+        return LLMResponse(
+            text=self.payload,
+            model="stub",
+            input_tokens=0,
+            output_tokens=0,
+            cache_hit=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _stub_llm_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the CLI's ``LLMClient`` so silver never hits DashScope.
+
+    Individual tests that want the populated-columns path can still
+    call ``monkeypatch.setattr("pipeline.cli.silver.LLMClient", ...)``
+    again — the last patch wins.
+    """
+    monkeypatch.setattr("pipeline.cli.silver.LLMClient", _StubLLMClient)
 
 
 def _configure_env(
@@ -292,6 +349,83 @@ def test_cli_silver_quarantines_rows_with_null_keys(
     assert run.rows_out == 3
     assert run.rows_rejected == 1
     assert run.rows_deduped == 0
+
+
+def test_cli_silver_populates_llm_extracted_columns(
+    tiny_source_parquet: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A populated LLM stub fills the six §6.2 entity columns without
+    regressing ``audio_confidence`` or ``has_content``.
+    """
+    _configure_env(tmp_path, monkeypatch)
+
+    populated_payload = json.dumps(
+        {
+            "veiculo_marca": "Toyota",
+            "veiculo_modelo": "Corolla",
+            "veiculo_ano": 2020,
+            "concorrente_mencionado": "Porto Seguro",
+            "valor_pago_atual_brl": 1850.5,
+            "sinistro_historico": False,
+        }
+    )
+
+    class _PopulatedClient(_StubLLMClient):
+        payload = populated_payload
+
+    monkeypatch.setattr("pipeline.cli.silver.LLMClient", _PopulatedClient)
+
+    batch_id, bronze_root = _run_ingest_and_return_batch_id(
+        tmp_path, tiny_source_parquet
+    )
+    silver_root = tmp_path / "silver"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        silver,
+        [
+            "--batch-id",
+            batch_id,
+            "--bronze-root",
+            str(bronze_root),
+            "--silver-root",
+            str(silver_root),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    silver_files = list(silver_root.glob("batch_id=*/part-*.parquet"))
+    assert len(silver_files) == 1
+    out = pl.scan_parquet(silver_files[0]).collect()
+
+    # Schema carries every LLM-extracted column with its declared dtype.
+    assert out.schema == SILVER_SCHEMA
+    for col in (
+        "veiculo_marca",
+        "veiculo_modelo",
+        "veiculo_ano",
+        "concorrente_mencionado",
+        "valor_pago_atual_brl",
+        "sinistro_historico",
+    ):
+        assert col in out.columns
+
+    # Populated LLM stub -> every row carries the fixed payload values.
+    assert out.height > 0
+    assert set(out["veiculo_marca"].to_list()) == {"Toyota"}
+    assert set(out["veiculo_modelo"].to_list()) == {"Corolla"}
+    assert set(out["veiculo_ano"].to_list()) == {2020}
+    assert set(out["concorrente_mencionado"].to_list()) == {"Porto Seguro"}
+    assert set(out["valor_pago_atual_brl"].to_list()) == {1850.5}
+    assert set(out["sinistro_historico"].to_list()) == {False}
+
+    # Regression guard: the audio / content lanes from earlier F2
+    # slices must keep working alongside the LLM lane.
+    assert "audio_confidence" in out.columns
+    assert "has_content" in out.columns
+    assert out["has_content"].null_count() == 0
 
 
 def test_cli_silver_rejects_path_traversal_in_silver_root(
