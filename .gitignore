@@ -56,3 +56,6 @@ Thumbs.db
 
 # OMC runtime (sessions, logs, ephemeral state). Keep only explicit opt-ins later.
 .omc/
+
+# Personal learning notes — local-only reading guide, not committed.
+LEARN.md
