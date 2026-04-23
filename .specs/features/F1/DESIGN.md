@@ -125,6 +125,16 @@ Steps:
 
 Any exception between steps 5 and 9 → set `status=FAILED`, record `error_type`, `error_message`, re-raise. No partial write remains: Bronze writes to a temp dir first, then atomic-renames. Temp dir is cleaned on failure.
 
+### 4a. `batch_id` collision bound
+
+`batch_id = sha256(source_hash + source_mtime)[:12]` keeps 48 bits of entropy. The birthday bound for a 48-bit digest is roughly `2^24 ≈ 16,777,216` distinct batches before a ≥50% collision probability. At the expected pipeline cadence (one batch per source refresh, sub-daily at most) 16M batches is ~45,000 years of headroom, so the truncation is safe for M1/M2/M3. Revisit when any of the following changes:
+
+- the pipeline starts accepting user-chosen `batch_id`s (hash no longer derived server-side);
+- batch volume crosses ~1M total (still orders of magnitude below the bound, but worth re-measuring);
+- a second input source is hashed into the same namespace without a source-scoped prefix.
+
+If any of those land, widen to `[:16]` (64 bits) — a one-line change that re-sets the collision horizon to cosmic scale.
+
 ## 5. Manifest DB schema
 
 SQLite at `state/manifest.db`. Table DDL in `pipeline/state/manifest.py`:
