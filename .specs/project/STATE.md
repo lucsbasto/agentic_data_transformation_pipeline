@@ -53,7 +53,7 @@ Memória persistente entre sessões. Curta e mutável. Não é log; é contexto 
 ## Sessão atual
 
 - Iniciada: 2026-04-22 (continuada em 2026-04-23).
-- Foco: Phase 0 (init) → F1 foundation completa.
+- Foco: **M1 shipped.** Phase 0 (init) → F1 foundation completa.
 - Marcos da sessão:
   - ROADMAP validado.
   - Git repo inicializado + remote configurado.
@@ -61,6 +61,8 @@ Memória persistente entre sessões. Curta e mutável. Não é log; é contexto 
   - STATE.md revisado (D-002 repontado pra DashScope; D-008/D-009/D-010 adicionados).
   - Skills de projeto criadas em `.claude/skills/` (python, polars, llm-client, agent-loop, medallion).
   - F1.1 → F1.7 shipped: pyproject/uv bootstrap, settings+logging+errors+paths, Bronze+manifest schemas, ManifestDB with crash recovery, ingest pipeline (scan/transform/write), click CLI, LLMCache, LLMClient w/ retries+fallback.
+  - F1.8 shipped: full README quickstart + real-parquet smoke run recorded (322 ms for 153,228 rows).
+  - F1.9 shipped: holistic M1-close review (reviewer-pipeline + critic) both verdict SHIP M1. ROADMAP marks F1 shipped.
   - Three-agent review lane per task (code-reviewer + security-reviewer + critic); every wave's findings triaged in `.specs/features/F1/REVIEWS/INDEX.md`.
   - 110 tests green, coverage 96%, ruff + mypy strict clean.
 
@@ -79,4 +81,32 @@ Measured against `data/raw/conversations_bronze.parquet` (8.7 MB, 153,228 rows):
 - Second run (idempotency):
   - short-circuited via `ingest.skip.already_completed`; no new Bronze write, no manifest mutation.
 - Budget for full load (M2 target): <15 min. Bronze alone at 322 ms is comfortably inside the envelope — the budget headroom goes to the Silver LLM enrichment in F2/F3.
-- Next: F1.9 final review agent pass, then close M1.
+
+## M1 — close (2026-04-23)
+
+F1 shipped. Evidence:
+
+- ROADMAP M1 exit criteria all met (see `.specs/features/F1/REVIEWS/F1.9-m1-close.md`).
+- Smoke run against the real 153,228-row parquet: 322 ms end-to-end; Bronze partition 4.2 MB zstd.
+- 110 tests green, coverage 96%, ruff + mypy strict clean.
+- Review trail: 6 waves of three-agent reviews (code-reviewer + security-reviewer + critic) + the F1.9 holistic close, all archived under `.specs/features/F1/REVIEWS/`.
+
+### Carry-forward items for M2 / F2
+
+The three seams most likely to tear when Silver lands:
+
+1. **`LLMClient.cached_call` signature** will need a request-object refactor before the first Silver call — Silver wants structured output / batch / streaming beyond the current `system/user/model/max_tokens/temperature` surface.
+2. **Lineage-column helper** — `transform_to_bronze` adds `batch_id + ingested_at + source_file_hash` inline. Extract into a shared helper before `transform_to_silver` copies the pattern.
+3. **`ManifestDB.runs` table writers** — DDL exists, no API. Silver run tracking needs `insert_run` / `mark_run_completed` / `mark_run_failed`.
+
+### Invariants pinned (ADR-only change)
+
+1. Bronze `pl.Schema` + Enum closed sets (`src/pipeline/schemas/bronze.py`).
+2. `batches` table DDL (`src/pipeline/schemas/manifest.py`) — Silver/Gold depend on the `batch_id` FK.
+3. `compute_cache_key` hash formula (`src/pipeline/llm/cache.py`) — any change invalidates every cached LLM response; version the algorithm if altered.
+
+### De-risk-F2 prototype (recommended first F2 move)
+
+~100-line `SilverOrchestrator`: read one Bronze partition, send 5 conversations through `LLMClient.cached_call` against real `qwen3-max`, write one Silver parquet. Forces concrete answers on Enum round-trip, prompt template shape, SQLite WAL contention between `ManifestDB` and `LLMCache`, `runs`-table writers, and the real `qwen3-max` latency number — before any full Silver code lands.
+
+- Next: start F2 Design when ready. Natural pause point here.
