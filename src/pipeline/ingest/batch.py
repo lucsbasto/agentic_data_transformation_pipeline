@@ -9,10 +9,17 @@ instead of double-writing Bronze.
 
 from __future__ import annotations
 
+# LEARN: ``hashlib`` is Python's standard cryptographic-hash library.
+# We use SHA-256 — not for security here, but because it is fast and
+# collision-resistant enough to stand in for "content fingerprint".
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+# LEARN: ``1 << 20`` is bit-shift for 2**20, i.e. 1,048,576 bytes = 1
+# MiB. Reading the file in 1 MiB chunks keeps peak memory bounded even
+# if the source grows to several GB. The trailing comment documents the
+# unit so readers don't have to re-derive it.
 _HASH_CHUNK_BYTES = 1 << 20  # 1 MiB
 
 
@@ -33,16 +40,33 @@ def compute_batch_identity(source: Path) -> BatchIdentity:
     collision-free for this pipeline (worst-case N unique batches where
     2^24 ≈ 16M is the birthday bound — far beyond our volume).
     """
+    # LEARN: ``Path.stat()`` asks the OS for filesystem metadata —
+    # mtime (modified time), size, permissions. We cast the float mtime
+    # to ``int`` so the batch_id is stable across platforms that report
+    # fractional seconds differently.
     stat = source.stat()
     source_mtime = int(stat.st_mtime)
 
+    # LEARN: build a fresh hasher and stream the file through
+    # ``update(chunk)``. ``iter(callable, sentinel)`` is a compact
+    # Python idiom: keep calling ``callable`` until it returns
+    # ``sentinel`` (here an empty bytes ``b""``, signalling EOF). The
+    # lambda captures ``fh.read(_HASH_CHUNK_BYTES)`` so each iteration
+    # reads the next 1 MiB chunk.
     content_hash = hashlib.sha256()
     with source.open("rb") as fh:
         for chunk in iter(lambda: fh.read(_HASH_CHUNK_BYTES), b""):
             content_hash.update(chunk)
+    # LEARN: ``hexdigest()`` turns the binary hash into a hex string
+    # (64 chars for sha256). Hex is URL-safe and grep-friendly.
     source_hash = content_hash.hexdigest()
 
+    # LEARN: ``f"...".encode()`` builds a string and encodes it to UTF-8
+    # bytes in one step. ``hashlib`` always wants bytes, not strings.
     combined = f"{source_hash}:{source_mtime}".encode()
+    # LEARN: ``[:12]`` slices the first 12 characters of the hex digest.
+    # 12 hex chars = 48 bits of entropy; the docstring explains why that
+    # is safe for our volume. See ``.specs/features/F1/DESIGN.md §4a``.
     batch_id = hashlib.sha256(combined).hexdigest()[:12]
 
     return BatchIdentity(

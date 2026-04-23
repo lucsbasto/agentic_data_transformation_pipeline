@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+# LEARN: ``polars.exceptions as pl_exc`` (second import below) gives us
+# the namespace to catch Polars-specific errors such as ``PolarsError``
+# and its subclasses in ``collect_bronze``.
 import polars as pl
 import polars.exceptions as pl_exc
 
@@ -38,10 +41,25 @@ def transform_to_bronze(
     are appended last so their position is stable in the output parquet.
     The result is still lazy; the caller is responsible for ``collect``.
     """
+    # LEARN: ``lf.select(...)`` returns a new LazyFrame containing ONLY
+    # the columns you name, in the order you name them. That is both a
+    # "keep these columns" filter and a "set the column order" step.
+    # Each argument is a Polars *expression* built from ``pl.col(...)``.
     typed = lf.select(
+        # LEARN: ``pl.col("x").cast(pl.String)`` builds an expression
+        # that reads column ``x`` and casts its values. ``.cast`` at
+        # lazy time plans the cast; it doesn't run until ``collect``.
         pl.col("message_id").cast(pl.String),
         pl.col("conversation_id").cast(pl.String),
+        # LEARN: ``.str.to_datetime(fmt, time_unit="us")`` parses a
+        # string column using the ``strftime``-style format we captured
+        # in ``schemas/bronze.TIMESTAMP_SOURCE_FORMAT``. Microsecond
+        # precision matches the declared Bronze dtype.
         pl.col("timestamp").str.to_datetime(TIMESTAMP_SOURCE_FORMAT, time_unit="us"),
+        # LEARN: casting to ``pl.Enum(...)`` is where drift detection
+        # kicks in. Any source value NOT in the enum list raises
+        # ``InvalidOperationError`` at ``collect`` time — exactly what
+        # we want for a Bronze layer that should refuse surprise values.
         pl.col("direction").cast(pl.Enum(list(DIRECTION_VALUES))),
         pl.col("sender_phone").cast(pl.String),
         pl.col("sender_name").cast(pl.String),
@@ -54,7 +72,16 @@ def transform_to_bronze(
         pl.col("conversation_outcome").cast(pl.String),
         pl.col("metadata").cast(pl.String),
     ).with_columns(
+        # LEARN: ``pl.lit(value)`` creates a literal column — the same
+        # value for every row. ``.alias(name)`` names it. ``with_columns``
+        # appends them without touching existing ones, which is why
+        # lineage columns always land at the end.
         pl.lit(batch_id, dtype=pl.String).alias("batch_id"),
+        # LEARN: ``.dt.cast_time_unit("us").dt.convert_time_zone("UTC")``
+        # chains two Polars datetime helpers on the literal so it matches
+        # the ``Datetime("us", time_zone="UTC")`` dtype declared in the
+        # Bronze schema. Dtype mismatches at write-time are exactly the
+        # errors ``assert_bronze_schema`` catches below.
         pl.lit(ingested_at).dt.cast_time_unit("us").dt.convert_time_zone("UTC").alias(
             "ingested_at"
         ),
@@ -71,8 +98,13 @@ def assert_bronze_schema(df: pl.DataFrame) -> None:
     parquet is written. Mismatches surface as :class:`SchemaDriftError`.
     """
     actual = df.schema
+    # LEARN: ``pl.Schema`` supports equality (``==``). If it differs,
+    # ``_schema_diff`` produces a human-readable list of what changed.
     if actual != BRONZE_SCHEMA:
         mismatches = _schema_diff(actual, BRONZE_SCHEMA)
+        # LEARN: ``"\n".join(...)`` is the Python way to build
+        # multi-line strings. The generator expression ``f"  - {m}"
+        # for m in mismatches`` produces one bullet per diff.
         raise SchemaDriftError(
             "bronze schema mismatch:\n" + "\n".join(f"  - {m}" for m in mismatches)
         )
@@ -86,6 +118,10 @@ def collect_bronze(lf: pl.LazyFrame) -> pl.DataFrame:
     as :class:`SchemaDriftError` instead of raw Polars exceptions.
     """
     try:
+        # LEARN: ``.collect()`` is where a LazyFrame materializes into
+        # an eager DataFrame — this is where ALL the work happens:
+        # file read, casts, expressions, the lot. Any schema violation
+        # surfaces here.
         return lf.collect()
     except pl_exc.PolarsError as exc:
         raise SchemaDriftError(
@@ -101,16 +137,28 @@ __all__ = [
 ]
 
 
+# LEARN: leading underscore marks this helper as module-private. Callers
+# inside this module use it freely; external imports should not. The
+# Python "private by convention" rule.
 def _schema_diff(
     actual: pl.Schema, expected: pl.Schema
 ) -> list[str]:
+    # LEARN: we build a plain ``list[str]`` and append to it. Simpler
+    # than a generator when the result is modest in size and you want
+    # to collect several kinds of diffs in one pass.
     diffs: list[str] = []
     actual_keys = set(actual.names())
     expected_keys = set(expected.names())
+    # LEARN: ``expected - actual`` is set difference: names in expected
+    # but missing in actual. ``sorted(...)`` makes the diff ordering
+    # deterministic so tests can assert on the exact message.
     for missing in sorted(expected_keys - actual_keys):
         diffs.append(f"missing column: {missing}")
     for extra in sorted(actual_keys - expected_keys):
         diffs.append(f"unexpected column: {extra}")
+    # LEARN: iterate actual column order so dtype mismatches surface in
+    # the order the user would see them in the DataFrame. ``actual[name]``
+    # indexing into a ``pl.Schema`` returns that column's dtype.
     for name in actual.names():
         if name in expected and actual[name] != expected[name]:
             diffs.append(
