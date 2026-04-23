@@ -158,7 +158,31 @@ keeps only the masked text.
 File: `src/pipeline/silver/pii.py:mask_all_pii`,
 `src/pipeline/silver/transform.py:_mask_body_expr`
 
-### 5f. `has_content` boolean
+### 5f-bis. Extract analytical dimensions (regex lane)
+
+Five columns are derived from the *raw* `message_body` in the same
+`select` pass — Polars fuses every regex walk into a single scan per
+row:
+
+| Column             | Shape        | What                                     |
+| ------------------ | ------------ | ---------------------------------------- |
+| `email_domain`     | `String`     | Lower-cased host + TLD (`"gmail.com"`).   |
+| `has_cpf`          | `Boolean`    | True when a formatted CPF is present.     |
+| `cep_prefix`       | `String`     | First 5 digits of the earliest CEP.       |
+| `has_phone_mention`| `Boolean`    | True when any phone-shaped run is found.  |
+| `plate_format`     | `String`     | `"mercosul"` / `"old"` / `null`.          |
+
+Every column here is *non-identifying* by construction — domain
+without local part, region prefix without street, format class
+without plate characters. The boolean flags carry presence without
+leaking digits. The LLM extraction lane (veículo, concorrente, valor
+atual, histórico de sinistros — PRD §6.2) lands in a later F2 slice.
+
+File: `src/pipeline/silver/extract.py`,
+`src/pipeline/silver/transform.py` (the five extract expressions in
+the main `select`).
+
+### 5g. `has_content` boolean
 
 True when `message_body` is non-null and contains at least one
 non-whitespace character. PRD §6.2 specifies stickers/images without
@@ -168,7 +192,7 @@ and a null-body text message is also uninspectable.
 
 File: `src/pipeline/silver/transform.py:_has_content_expr`
 
-### 5g. Parse `metadata` JSON
+### 5h. Parse `metadata` JSON
 
 `normalize.parse_metadata_expr` decodes each JSON string into the
 typed `METADATA_STRUCT` (device, city, state, response_time_sec,
@@ -177,7 +201,7 @@ the orchestrator aggregates the null count for a log field.
 
 File: `src/pipeline/silver/normalize.py:parse_metadata_expr`
 
-### 5h. Passthrough + lineage constants
+### 5i. Passthrough + lineage constants
 
 - Passthrough from Bronze: `message_id`, `conversation_id`,
   `campaign_id`, `agent_id`, `direction`, `message_type`, `status`,
@@ -289,6 +313,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `pipeline/silver/dedup.py`         | Dedup rule                               |
 | `pipeline/silver/normalize.py`     | Timestamp, metadata, name normalizers    |
 | `pipeline/silver/pii.py`           | Positional PII maskers                   |
+| `pipeline/silver/extract.py`       | Regex entity extraction (domain/region/format) |
 | `pipeline/silver/lead.py`          | Phone normalization + HMAC-SHA256 lead id |
 | `pipeline/silver/reconcile.py`     | Canonical name per lead                  |
 | `pipeline/silver/writer.py`        | Atomic parquet writer                    |
@@ -305,6 +330,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `tests/unit/test_silver_dedup.py`                  | Priority, timestamp, batch_id ties   |
 | `tests/unit/test_silver_normalize.py`              | Timestamp tag, metadata, name norm   |
 | `tests/unit/test_silver_pii.py`                    | Every positional masker              |
+| `tests/unit/test_silver_extract.py`                | Every entity extractor               |
 | `tests/unit/test_silver_lead.py`                   | Phone normalization, HMAC, idempotence |
 | `tests/unit/test_silver_reconcile.py`              | Canonical-name pick rule             |
 | `tests/unit/test_silver_transform.py`              | Full transform wiring + schema round-trip |
