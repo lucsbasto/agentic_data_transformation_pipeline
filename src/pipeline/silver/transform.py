@@ -34,6 +34,13 @@ import polars as pl
 from pipeline.errors import SchemaDriftError
 from pipeline.schemas.silver import SILVER_COLUMNS, SILVER_SCHEMA
 from pipeline.silver.dedup import dedup_events
+from pipeline.silver.extract import (
+    extract_cep_prefix_expr,
+    extract_email_domain_expr,
+    extract_has_cpf_expr,
+    extract_has_phone_mention_expr,
+    extract_plate_format_expr,
+)
 from pipeline.silver.lead import derive_lead_id_expr
 from pipeline.silver.normalize import (
     normalize_name_expr,
@@ -144,6 +151,18 @@ def silver_transform(
             derive_lead_id_expr(pl.col("sender_phone"), secret).alias("lead_id"),
             _mask_body_expr(pl.col("message_body")).alias("message_body_masked"),
             _has_content_expr(pl.col("message_body")).alias("has_content"),
+            # LEARN: extract runs against the *raw* ``message_body``,
+            # not the masked column. Both expressions read the same
+            # source column; Polars fuses the passes so the regex
+            # work only walks the text once per row regardless of how
+            # many extractors we chain.
+            extract_email_domain_expr(pl.col("message_body")).alias("email_domain"),
+            extract_has_cpf_expr(pl.col("message_body")).alias("has_cpf"),
+            extract_cep_prefix_expr(pl.col("message_body")).alias("cep_prefix"),
+            extract_has_phone_mention_expr(pl.col("message_body")).alias(
+                "has_phone_mention"
+            ),
+            extract_plate_format_expr(pl.col("message_body")).alias("plate_format"),
             pl.col("campaign_id"),
             pl.col("agent_id"),
             pl.col("direction"),

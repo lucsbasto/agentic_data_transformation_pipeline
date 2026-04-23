@@ -115,6 +115,21 @@ _SILVER_FIELDS: dict[str, pl.DataType] = {
     # --- content --------------------------------------------------------------
     "message_body_masked": pl.String(),
     "has_content": pl.Boolean(),
+    # --- extracted analytical dimensions (F2, regex lane) ---------------------
+    # LEARN: these columns are *non-identifying* on purpose — they are
+    # the analytical shadow of the PII maskers. ``email_domain`` keeps
+    # the provider bucket (``"gmail.com"``) but drops the local part;
+    # ``cep_prefix`` keeps the region (first 5 digits) but drops the
+    # street-level suffix; ``plate_format`` keeps the Mercosul-vs-old
+    # distinction but no characters from the plate itself. The two
+    # boolean flags (``has_cpf`` / ``has_phone_mention``) signal
+    # presence without carrying any dimension — a CPF value has no
+    # analytical shape worth keeping.
+    "email_domain": pl.String(),
+    "has_cpf": pl.Boolean(),
+    "cep_prefix": pl.String(),
+    "has_phone_mention": pl.Boolean(),
+    "plate_format": pl.String(),
     # --- passthrough (Bronze -> Silver unchanged) -----------------------------
     "campaign_id": pl.String(),
     "agent_id": pl.String(),

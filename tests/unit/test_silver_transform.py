@@ -201,6 +201,39 @@ def test_silver_transform_masks_cpf_in_body() -> None:
     assert "***.***.***-**" in body
 
 
+def test_silver_transform_extracts_analytical_dimensions() -> None:
+    """The regex extraction lane populates all five new columns while
+    the raw PII never survives onto the masked body.
+    """
+    body = (
+        "email ana@gmail.com, CPF 123.456.789-01, CEP 01310-930, "
+        "phone 11987654321, plate ABC1D23"
+    )
+    lf = _bronze_frame([_bronze_row(message_body=body)])
+    out = _run_silver(lf)
+    assert out["email_domain"][0] == "gmail.com"
+    assert out["has_cpf"][0] is True
+    assert out["cep_prefix"][0] == "01310"
+    assert out["has_phone_mention"][0] is True
+    assert out["plate_format"][0] == "mercosul"
+    # Sanity: masked body has none of the raw identifiers left.
+    masked = out["message_body_masked"][0]
+    assert "ana@gmail.com" not in masked
+    assert "123.456.789-01" not in masked
+    assert "01310-930" not in masked
+    assert "ABC1D23" not in masked
+
+
+def test_silver_transform_extractors_null_safe_on_empty_body() -> None:
+    lf = _bronze_frame([_bronze_row(message_body=None)])
+    out = _run_silver(lf)
+    assert out["email_domain"][0] is None
+    assert out["has_cpf"][0] is False
+    assert out["cep_prefix"][0] is None
+    assert out["has_phone_mention"][0] is False
+    assert out["plate_format"][0] is None
+
+
 def test_silver_transform_masks_sender_phone() -> None:
     lf = _bronze_frame([_bronze_row(sender_phone="11987654321")])
     out = _run_silver(lf)
