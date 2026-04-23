@@ -108,6 +108,7 @@ class RunRow:
     rows_in: int | None
     rows_out: int | None
     rows_deduped: int | None
+    rows_rejected: int | None
     output_path: str | None
     error_type: str | None
     error_message: str | None
@@ -473,6 +474,7 @@ class ManifestDB:
         rows_in: int | None = None,
         rows_out: int | None = None,
         rows_deduped: int | None = None,
+        rows_rejected: int | None = None,
         output_path: str | None = None,
     ) -> None:
         """Flip a run to COMPLETED and record its metrics."""
@@ -484,6 +486,7 @@ class ManifestDB:
             rows_in=rows_in,
             rows_out=rows_out,
             rows_deduped=rows_deduped,
+            rows_rejected=rows_rejected,
             output_path=output_path,
             error_type=None,
             error_message=None,
@@ -514,8 +517,8 @@ class ManifestDB:
         conn = self._require_conn()
         row = conn.execute(
             "SELECT run_id, batch_id, layer, status, started_at, finished_at, "
-            "duration_ms, rows_in, rows_out, rows_deduped, output_path, "
-            "error_type, error_message "
+            "duration_ms, rows_in, rows_out, rows_deduped, rows_rejected, "
+            "output_path, error_type, error_message "
             "FROM runs WHERE run_id = ?;",
             (run_id,),
         ).fetchone()
@@ -532,8 +535,8 @@ class ManifestDB:
         conn = self._require_conn()
         row = conn.execute(
             "SELECT run_id, batch_id, layer, status, started_at, finished_at, "
-            "duration_ms, rows_in, rows_out, rows_deduped, output_path, "
-            "error_type, error_message "
+            "duration_ms, rows_in, rows_out, rows_deduped, rows_rejected, "
+            "output_path, error_type, error_message "
             "FROM runs WHERE batch_id = ? AND layer = ? "
             "ORDER BY started_at DESC, rowid DESC LIMIT 1;",
             (batch_id, layer),
@@ -698,6 +701,7 @@ class ManifestDB:
         rows_in: int | None = None,
         rows_out: int | None = None,
         rows_deduped: int | None = None,
+        rows_rejected: int | None = None,
         output_path: str | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
@@ -724,6 +728,7 @@ class ManifestDB:
             "rows_in = COALESCE(?, rows_in), "
             "rows_out = COALESCE(?, rows_out), "
             "rows_deduped = COALESCE(?, rows_deduped), "
+            "rows_rejected = COALESCE(?, rows_rejected), "
             "output_path = COALESCE(?, output_path), "
             f"{error_clause} "
             "WHERE run_id = ?;"
@@ -735,6 +740,7 @@ class ManifestDB:
             rows_in,
             rows_out,
             rows_deduped,
+            rows_rejected,
             output_path,
             *error_params,
             run_id,

@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- rows were collapsed. Gold leaves this ``NULL`` because Gold's
     -- aggregation semantics are different.
     rows_deduped        INTEGER,
+    -- F2: Silver also routes rows with null dedup keys (or future
+    -- contract violations) to a sibling ``rejected/`` parquet — this
+    -- column records how many landed there. Null for Bronze/Gold runs.
+    rows_rejected       INTEGER,
     -- Written path of the layer's parquet output. Silver: Silver partition
     -- root. Gold: Gold table dir. Bronze could also populate this in
     -- retrospect, but F1 stores its path on ``batches.bronze_path`` so
@@ -116,6 +120,7 @@ RUNS_MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
     ("duration_ms", "ALTER TABLE runs ADD COLUMN duration_ms INTEGER;"),
     ("rows_deduped", "ALTER TABLE runs ADD COLUMN rows_deduped INTEGER;"),
     ("output_path", "ALTER TABLE runs ADD COLUMN output_path TEXT;"),
+    ("rows_rejected", "ALTER TABLE runs ADD COLUMN rows_rejected INTEGER;"),
 )
 
 # LEARN: ``layer`` values that pass the CHECK constraint. Kept here as
