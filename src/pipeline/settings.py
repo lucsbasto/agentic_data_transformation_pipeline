@@ -94,6 +94,20 @@ class Settings(BaseSettings):
             "poison the SQLite cache with an unbounded blob."
         ),
     )
+    # LEARN: PRD §18.4 pins a hard cap on LLM calls per Silver batch
+    # (default 5000). Once the extractor hits the cap, remaining rows
+    # are left with null entity columns and the batch logs
+    # ``llm.budget_exhausted`` so an operator can raise the ceiling or
+    # split the batch. Enforced in ``silver/llm_extract.py``.
+    pipeline_llm_max_calls_per_batch: int = Field(
+        default=5000,
+        ge=1,
+        description=(
+            "PRD §18.4 hard cap on LLM calls per Silver batch. When "
+            "exhausted, the extractor stops calling the LLM and fills "
+            "remaining rows with null entity columns."
+        ),
+    )
 
     # LEARN: ``model_config`` is Pydantic v2's way to configure the model
     # itself (v1 used an inner ``class Config``). The dict-like

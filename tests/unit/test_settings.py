@@ -23,6 +23,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "PIPELINE_STATE_DB",
         "PIPELINE_LOG_LEVEL",
         "PIPELINE_LEAD_SECRET",
+        "PIPELINE_LLM_MAX_CALLS_PER_BATCH",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
@@ -82,6 +83,27 @@ def test_defaults_applied_when_required_env_provided(
     assert settings.llm_model_fallback == "qwen3-coder-plus"
     assert settings.pipeline_retry_budget == 3
     assert settings.pipeline_log_level == "INFO"
+    assert settings.pipeline_llm_max_calls_per_batch == 5000
+
+
+def test_llm_max_calls_per_batch_override(
+    clean_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("PIPELINE_LLM_MAX_CALLS_PER_BATCH", "250")
+    settings = Settings.load()
+    assert settings.pipeline_llm_max_calls_per_batch == 250
+
+
+def test_llm_max_calls_per_batch_rejects_zero(
+    clean_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("PIPELINE_LLM_MAX_CALLS_PER_BATCH", "0")
+    with pytest.raises(ConfigError):
+        Settings.load()
 
 
 def test_lead_secret_is_redacted_in_repr(
