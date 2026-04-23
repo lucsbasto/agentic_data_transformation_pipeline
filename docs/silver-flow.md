@@ -81,6 +81,35 @@ File: `src/pipeline/cli/silver.py:_run_silver` (section "try:")
 
 ---
 
+## 3b. Quarantine — split valid from rejected before any transform
+
+Before any transform touches the frame, `partition_rows` splits the
+LazyFrame into two lanes:
+
+- **valid** — rows with non-null `message_id` AND non-null
+  `conversation_id`. Keeps the Bronze schema unchanged so
+  `silver_transform` can consume it directly.
+- **rejected** — rows missing either key. Gets a `reject_reason`
+  label (checked in order: `null_message_id` first, then
+  `null_conversation_id`) plus a `rejected_at` UTC timestamp.
+
+Why split before transform: the transforms downstream assume unique
+`(conversation_id, message_id)` pairs. A row with null keys would
+either crash dedup or silently collapse into a "ghost bucket". The
+quarantine lane hands operators exactly the bad input so they can
+triage upstream.
+
+The rejected lane is collected and, if non-empty, written to
+`silver_root/batch_id=<id>/rejected/part-0.parquet` by `write_rejected`
+using the same atomic-swap pattern as the main Silver write. The
+manifest `runs` row records `rows_rejected` so operators see the
+counter without a parquet scan.
+
+File: `src/pipeline/silver/quarantine.py:partition_rows`,
+`src/pipeline/silver/writer.py:write_rejected`.
+
+---
+
 ## 4. Dedup — one row per `(conversation_id, message_id)`
 
 The first transform is always dedup. Bronze preserves every WhatsApp
@@ -281,7 +310,9 @@ records:
 
 - `rows_in` — row count of the Bronze scan.
 - `rows_out` — row count of the Silver parquet.
-- `rows_deduped` — `rows_in - rows_out`.
+- `rows_rejected` — rows routed to the quarantine partition.
+- `rows_deduped` — `(rows_in - rows_rejected) - rows_out`. The three
+  counters sum to `rows_in`.
 - `output_path` — absolute path to the written Silver file.
 - `duration_ms` — `time.monotonic()` delta.
 - `finished_at` — UTC wall clock (ISO-8601).
@@ -314,6 +345,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `pipeline/silver/normalize.py`     | Timestamp, metadata, name normalizers    |
 | `pipeline/silver/pii.py`           | Positional PII maskers                   |
 | `pipeline/silver/extract.py`       | Regex entity extraction (domain/region/format) |
+| `pipeline/silver/quarantine.py`    | Row-level validator + rejected-schema  |
 | `pipeline/silver/lead.py`          | Phone normalization + HMAC-SHA256 lead id |
 | `pipeline/silver/reconcile.py`     | Canonical name per lead                  |
 | `pipeline/silver/writer.py`        | Atomic parquet writer                    |
@@ -331,6 +363,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `tests/unit/test_silver_normalize.py`              | Timestamp tag, metadata, name norm   |
 | `tests/unit/test_silver_pii.py`                    | Every positional masker              |
 | `tests/unit/test_silver_extract.py`                | Every entity extractor               |
+| `tests/unit/test_silver_quarantine.py`             | Split rules + rejected schema        |
 | `tests/unit/test_silver_lead.py`                   | Phone normalization, HMAC, idempotence |
 | `tests/unit/test_silver_reconcile.py`              | Canonical-name pick rule             |
 | `tests/unit/test_silver_transform.py`              | Full transform wiring + schema round-trip |
