@@ -47,6 +47,23 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = Field(
         ..., description="LLM provider API key. Reused for DashScope via the Anthropic SDK."
     )
+    # LEARN: ``PIPELINE_LEAD_SECRET`` is the HMAC key that Silver uses to
+    # derive ``lead_id`` from a phone number. It MUST be required (no
+    # default): if it silently fell back to an empty string, every
+    # ``lead_id`` would be guessable by anyone who can compute HMAC. The
+    # ``SecretStr`` wrapper keeps the value out of ``repr(settings)``
+    # and out of ``str(settings)`` so stray logs never leak it. The
+    # caller reads it with ``.get_secret_value()`` only at the edge that
+    # actually needs the raw bytes (see ``silver/lead.py``).
+    pipeline_lead_secret: SecretStr = Field(
+        ...,
+        description=(
+            "HMAC-SHA256 key used to derive lead_id from the normalized phone "
+            "number in the Silver layer. Required; must be at least 16 bytes "
+            "of cryptographic entropy. Rotating this value re-hashes every "
+            "lead_id on the next Silver run."
+        ),
+    )
     # LEARN: ``AnyHttpUrl`` validates the string looks like an HTTP(S)
     # URL — no bare hostnames, no "ftp://". A typo in ``.env`` fails fast.
     anthropic_base_url: AnyHttpUrl = Field(
@@ -75,6 +92,20 @@ class Settings(BaseSettings):
             "Maximum characters accepted from a single provider response "
             "before it is cached. A hostile or broken upstream can otherwise "
             "poison the SQLite cache with an unbounded blob."
+        ),
+    )
+    # LEARN: PRD §18.4 pins a hard cap on LLM calls per Silver batch
+    # (default 5000). Once the extractor hits the cap, remaining rows
+    # are left with null entity columns and the batch logs
+    # ``llm.budget_exhausted`` so an operator can raise the ceiling or
+    # split the batch. Enforced in ``silver/llm_extract.py``.
+    pipeline_llm_max_calls_per_batch: int = Field(
+        default=5000,
+        ge=1,
+        description=(
+            "PRD §18.4 hard cap on LLM calls per Silver batch. When "
+            "exhausted, the extractor stops calling the LLM and fills "
+            "remaining rows with null entity columns."
         ),
     )
 

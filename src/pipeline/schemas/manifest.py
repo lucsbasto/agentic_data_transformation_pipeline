@@ -61,6 +61,11 @@ RUN_STATUSES: Final[tuple[str, ...]] = (
     RUN_STATUS_FAILED,
 )
 
+# LEARN: ``runs`` is the per-layer execution log. One row per attempt
+# (``run_id`` is caller-generated, typically the same short UUID that
+# shows up in ``structlog`` events). Silver and Gold reuse this table —
+# the ``layer`` column is the only thing that differs between a Bronze
+# ingest, a Silver transform, and a Gold build.
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id              TEXT PRIMARY KEY,
@@ -73,8 +78,22 @@ CREATE TABLE IF NOT EXISTS runs (
     status              TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','COMPLETED','FAILED')),
     started_at          TEXT NOT NULL,
     finished_at         TEXT,
+    duration_ms         INTEGER,
     rows_in             INTEGER,
     rows_out            INTEGER,
+    -- F2: Silver reports how many duplicate (conversation_id, message_id)
+    -- rows were collapsed. Gold leaves this ``NULL`` because Gold's
+    -- aggregation semantics are different.
+    rows_deduped        INTEGER,
+    -- F2: Silver also routes rows with null dedup keys (or future
+    -- contract violations) to a sibling ``rejected/`` parquet — this
+    -- column records how many landed there. Null for Bronze/Gold runs.
+    rows_rejected       INTEGER,
+    -- Written path of the layer's parquet output. Silver: Silver partition
+    -- root. Gold: Gold table dir. Bronze could also populate this in
+    -- retrospect, but F1 stores its path on ``batches.bronze_path`` so
+    -- ``output_path`` for a bronze run is typically left ``NULL``.
+    output_path         TEXT,
     error_type          TEXT,
     error_message       TEXT
 );
@@ -84,6 +103,37 @@ RUNS_INDEXES: Final[tuple[str, ...]] = (
     "CREATE INDEX IF NOT EXISTS idx_runs_batch_id ON runs(batch_id);",
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);",
     "CREATE INDEX IF NOT EXISTS idx_runs_layer ON runs(layer);",
+    # LEARN: composite index — speeds up the common Silver/Gold lookup
+    # "does this batch have a COMPLETED run for this layer?" which
+    # filters on ``(batch_id, layer, status)``.
+    "CREATE INDEX IF NOT EXISTS idx_runs_batch_layer ON runs(batch_id, layer);",
+)
+
+# LEARN: SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``. The
+# migration path is: read ``PRAGMA table_info(runs)`` (returns one row per
+# column), diff against the list below, execute each missing ALTER. This
+# tuple is the AUTHORITATIVE set of columns that exist in the current
+# ``RUNS_DDL`` but were NOT in the F1 version of the DDL — a fresh DB
+# gets them via CREATE TABLE; an existing F1 DB gets them via ALTER.
+# Format: (column_name, full ``ADD COLUMN`` statement).
+RUNS_MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
+    ("duration_ms", "ALTER TABLE runs ADD COLUMN duration_ms INTEGER;"),
+    ("rows_deduped", "ALTER TABLE runs ADD COLUMN rows_deduped INTEGER;"),
+    ("output_path", "ALTER TABLE runs ADD COLUMN output_path TEXT;"),
+    ("rows_rejected", "ALTER TABLE runs ADD COLUMN rows_rejected INTEGER;"),
+)
+
+# LEARN: ``layer`` values that pass the CHECK constraint. Kept here as
+# Python constants so code comparisons stay type-checked rather than
+# relying on stringly-typed literals scattered around the codebase.
+RUN_LAYER_BRONZE: Final[str] = "bronze"
+RUN_LAYER_SILVER: Final[str] = "silver"
+RUN_LAYER_GOLD: Final[str] = "gold"
+
+RUN_LAYERS: Final[tuple[str, ...]] = (
+    RUN_LAYER_BRONZE,
+    RUN_LAYER_SILVER,
+    RUN_LAYER_GOLD,
 )
 
 # LEARN: the LLM cache table. Every successful call to the LLM gets

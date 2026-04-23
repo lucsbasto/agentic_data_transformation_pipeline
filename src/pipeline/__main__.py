@@ -9,6 +9,7 @@ from __future__ import annotations
 import click
 
 from pipeline.cli.ingest import ingest
+from pipeline.cli.silver import silver
 
 
 # LEARN: ``@click.group`` declares a command that itself contains other
@@ -23,10 +24,10 @@ def cli() -> None:
     """Agentic data transformation pipeline (Bronze → Silver → Gold)."""
 
 
-# LEARN: ``cli.add_command(ingest)`` registers the ``ingest`` subcommand
-# we imported above. New subcommands (``silver``, ``gold``) will be
-# added here as the pipeline grows.
+# LEARN: ``cli.add_command(...)`` registers each subcommand we imported
+# above. ``gold`` will land here once F3 ships.
 cli.add_command(ingest)
+cli.add_command(silver)
 
 
 def main() -> None:

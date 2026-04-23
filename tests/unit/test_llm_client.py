@@ -80,9 +80,11 @@ def settings(
         "PIPELINE_LOOP_SLEEP_SECONDS",
         "PIPELINE_STATE_DB",
         "PIPELINE_LOG_LEVEL",
+        "PIPELINE_LEAD_SECRET",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     monkeypatch.setenv("LLM_MODEL_PRIMARY", "qwen3-max")
     monkeypatch.setenv("LLM_MODEL_FALLBACK", "qwen3-coder-plus")
     monkeypatch.setenv("PIPELINE_RETRY_BUDGET", "3")
@@ -238,9 +240,11 @@ def test_oversize_response_is_rejected(
     for key in [
         "ANTHROPIC_API_KEY",
         "PIPELINE_LLM_RESPONSE_CAP",
+        "PIPELINE_LEAD_SECRET",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     monkeypatch.setenv("PIPELINE_LLM_RESPONSE_CAP", "10")
     monkeypatch.chdir(tmp_path)
     tight = Settings.load()
