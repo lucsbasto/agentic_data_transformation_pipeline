@@ -33,8 +33,9 @@ from pipeline.logging import bind_context, clear_context, configure_logging, get
 from pipeline.paths import data_bronze_dir, data_silver_dir
 from pipeline.schemas.manifest import RUN_LAYER_SILVER
 from pipeline.settings import Settings
+from pipeline.silver.quarantine import partition_rows
 from pipeline.silver.transform import assert_silver_schema, silver_transform
-from pipeline.silver.writer import write_silver
+from pipeline.silver.writer import write_rejected, write_silver
 from pipeline.state.manifest import ManifestDB
 
 
@@ -168,17 +169,34 @@ def _run_silver(
         try:
             lf = pl.scan_parquet(bronze_part)
             rows_in = lf.select(pl.len()).collect().item()
+            # Single ``now`` is reused for ``transformed_at`` and
+            # ``rejected_at`` so both lanes of a run share one wall
+            # clock — easier to correlate in logs.
+            now = datetime.now(tz=UTC)
+            valid_lf, rejected_lf = partition_rows(lf, rejected_at=now)
+            rejected_df = rejected_lf.collect()
             silver_lf = silver_transform(
-                lf,
+                valid_lf,
                 secret=settings.pipeline_lead_secret.get_secret_value(),
                 silver_batch_id=batch_id,
-                transformed_at=datetime.now(tz=UTC),
+                transformed_at=now,
             )
             df = silver_lf.collect()
             assert_silver_schema(df)
             write_result = write_silver(
                 df, silver_root=silver_root, batch_id=batch_id
             )
+            rejected_written: int = 0
+            if rejected_df.height > 0:
+                rejected_result = write_rejected(
+                    rejected_df, silver_root=silver_root, batch_id=batch_id
+                )
+                rejected_written = rejected_result.rows_written
+                logger.info(
+                    "silver.rejected.written",
+                    rows_rejected=rejected_written,
+                    rejected_path=str(rejected_result.rejected_path),
+                )
         except PipelineError as exc:
             duration_ms = int((time.monotonic() - started_wall) * 1000)
             manifest.mark_run_failed(
@@ -212,7 +230,9 @@ def _run_silver(
                 f"unexpected {type(exc).__name__} during silver: {exc}"
             ) from exc
 
-        rows_deduped = rows_in - df.height
+        # rows_deduped excludes rejected rows so the three counters
+        # (rejected + deduped + out) sum to rows_in.
+        rows_deduped = (rows_in - rejected_written) - df.height
         duration_ms = int((time.monotonic() - started_wall) * 1000)
         manifest.mark_run_completed(
             run_id=run_id,
@@ -221,6 +241,7 @@ def _run_silver(
             rows_in=rows_in,
             rows_out=df.height,
             rows_deduped=rows_deduped,
+            rows_rejected=rejected_written,
             output_path=str(write_result.silver_path),
         )
 
@@ -229,12 +250,14 @@ def _run_silver(
         rows_in=rows_in,
         rows_out=df.height,
         rows_deduped=rows_deduped,
+        rows_rejected=rejected_written,
         output_path=str(write_result.silver_path),
         duration_ms=duration_ms,
     )
     click.echo(
         f"silver wrote {df.height} rows "
-        f"(deduped {rows_deduped}) to {write_result.silver_path} "
+        f"(deduped {rows_deduped}, rejected {rejected_written}) "
+        f"to {write_result.silver_path} "
         f"(run={run_id}, {duration_ms} ms)"
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -10,7 +11,9 @@ from click.testing import CliRunner
 
 from pipeline.cli.ingest import ingest
 from pipeline.cli.silver import silver
+from pipeline.schemas.bronze import BRONZE_SCHEMA
 from pipeline.schemas.silver import SILVER_SCHEMA
+from pipeline.silver.quarantine import REJECTED_SCHEMA
 from pipeline.state.manifest import ManifestDB
 
 pytestmark = pytest.mark.integration
@@ -188,6 +191,107 @@ def test_cli_silver_rejects_path_shaped_batch_id(
     )
     assert result.exit_code != 0
     assert "invalid --batch-id" in result.output
+
+
+def test_cli_silver_quarantines_rows_with_null_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bronze rows missing message_id or conversation_id must land in a
+    sibling ``rejected/`` partition and the manifest run must count
+    them — never silently dropped.
+    """
+    state_db = _configure_env(tmp_path, monkeypatch)
+
+    # Build a Bronze partition by hand: three valid rows + one bad row
+    # with a null message_id. We bypass the ingest CLI here because the
+    # fixture has only good rows; the batch row is inserted directly.
+    bronze_root = tmp_path / "bronze"
+    batch_id = "b-quarantine-test"
+    partition_dir = bronze_root / f"batch_id={batch_id}"
+    partition_dir.mkdir(parents=True)
+    rows = [
+        {
+            "message_id": mid,
+            "conversation_id": "c1",
+            "timestamp": datetime(2026, 4, 23, 12, 0, 0),
+            "direction": "inbound",
+            "sender_phone": "+5511987654321",
+            "sender_name": "Ana",
+            "message_type": "text",
+            "message_body": "hi",
+            "status": "sent",
+            "channel": "whatsapp",
+            "campaign_id": "c",
+            "agent_id": "a",
+            "conversation_outcome": None,
+            "metadata": "{}",
+            "batch_id": batch_id,
+            "ingested_at": datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC),
+            "source_file_hash": "deadbeef",
+        }
+        for mid in ["m1", None, "m3", "m4"]
+    ]
+    pl.DataFrame(rows, schema=BRONZE_SCHEMA).write_parquet(
+        partition_dir / "part-0.parquet"
+    )
+
+    # Register the batch in the manifest so silver can find it.
+    with ManifestDB(state_db) as manifest:
+        manifest.insert_batch(
+            batch_id=batch_id,
+            source_path=str(partition_dir / "part-0.parquet"),
+            source_hash="deadbeef",
+            source_mtime=0,
+            started_at="2026-04-23T12:00:00Z",
+        )
+        manifest.mark_completed(
+            batch_id=batch_id,
+            rows_read=4,
+            rows_written=4,
+            bronze_path=str(partition_dir / "part-0.parquet"),
+            finished_at="2026-04-23T12:00:01Z",
+            duration_ms=1,
+        )
+
+    silver_root = tmp_path / "silver"
+    runner = CliRunner()
+    result = runner.invoke(
+        silver,
+        [
+            "--batch-id",
+            batch_id,
+            "--bronze-root",
+            str(bronze_root),
+            "--silver-root",
+            str(silver_root),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "rejected 1" in result.output
+
+    # Rejected partition exists with the declared schema.
+    rejected_files = list(silver_root.glob("batch_id=*/rejected/part-*.parquet"))
+    assert len(rejected_files) == 1
+    rejected_df = pl.scan_parquet(rejected_files[0]).collect()
+    assert rejected_df.schema == REJECTED_SCHEMA
+    assert rejected_df.height == 1
+    assert rejected_df["reject_reason"][0] == "null_message_id"
+
+    # Valid Silver partition has the 3 surviving rows.
+    silver_files = list(silver_root.glob("batch_id=*/part-*.parquet"))
+    assert len(silver_files) == 1
+    silver_df = pl.scan_parquet(silver_files[0]).collect()
+    assert silver_df.height == 3
+
+    # Manifest run row carries the quarantine counter.
+    with ManifestDB(state_db) as manifest:
+        run = manifest.get_latest_run(batch_id=batch_id, layer="silver")
+    assert run is not None
+    assert run.rows_in == 4
+    assert run.rows_out == 3
+    assert run.rows_rejected == 1
+    assert run.rows_deduped == 0
 
 
 def test_cli_silver_rejects_path_traversal_in_silver_root(
