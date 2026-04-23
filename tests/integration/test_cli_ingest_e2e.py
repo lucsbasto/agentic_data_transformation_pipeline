@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -101,3 +102,64 @@ def test_cli_ingest_missing_source_is_click_error(
         ["--source", str(tmp_path / "missing.parquet")],
     )
     assert result.exit_code != 0
+
+
+def test_cli_ingest_rejects_path_traversal_in_bronze_root(
+    tiny_source_parquet: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_STATE_DB", str(tmp_path / "manifest.db"))
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        ingest,
+        [
+            "--source",
+            str(tiny_source_parquet),
+            "--bronze-root",
+            "../../etc/bronze",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "'..' segments are not allowed in --bronze-root" in result.output
+
+
+def test_cli_ingest_marks_failed_on_unexpected_exception(
+    tiny_source_parquet: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-PipelineError inside the ingest step must still flip the row to FAILED."""
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated polars crash")
+
+    # Patch the symbol the CLI module actually binds — not the definition site.
+    # ``pipeline.cli.__init__`` re-exports ``ingest`` (the Command), which
+    # shadows the submodule when accessed as ``pipeline.cli.ingest``. Reach
+    # the real module object via ``sys.modules`` so the monkeypatch lands on
+    # the ``transform_to_bronze`` reference used inside ``_run_ingest``.
+    cli_module = sys.modules["pipeline.cli.ingest"]
+    monkeypatch.setattr(cli_module, "transform_to_bronze", _boom)
+
+    exit_code, stdout, _bronze_root, state_db = _run_ingest(
+        tmp_path, monkeypatch, tiny_source_parquet
+    )
+
+    assert exit_code != 0
+    assert "simulated polars crash" in stdout
+
+    with ManifestDB(state_db) as manifest:
+        # There must be exactly one batch row, and it must be FAILED with the
+        # original exception class recorded — not left orphaned in IN_PROGRESS.
+        assert manifest._conn is not None
+        rows = manifest._conn.execute(
+            "SELECT batch_id, status, error_type, error_message FROM batches;"
+        ).fetchall()
+    assert len(rows) == 1
+    (_bid, status, error_type, error_message) = tuple(rows[0])
+    assert status == "FAILED"
+    assert error_type == "RuntimeError"
+    assert error_message == "simulated polars crash"

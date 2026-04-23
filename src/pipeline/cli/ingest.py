@@ -16,7 +16,7 @@ from pathlib import Path
 
 import click
 
-from pipeline.errors import PipelineError
+from pipeline.errors import IngestError, PipelineError
 from pipeline.ingest import (
     compute_batch_identity,
     scan_source,
@@ -52,6 +52,9 @@ def _default_source() -> Path:
 )
 def ingest(source: Path, bronze_root: Path) -> None:
     """Read the raw parquet, cast to Bronze, and register the batch."""
+    source = _safe_resolve(source, flag="--source")
+    bronze_root = _safe_resolve(bronze_root, flag="--bronze-root")
+
     settings = Settings.load()
     configure_logging(settings.pipeline_log_level)
     logger = get_logger("pipeline.ingest")
@@ -77,6 +80,21 @@ def ingest(source: Path, bronze_root: Path) -> None:
         raise click.ClickException(str(exc)) from exc
     finally:
         clear_context()
+
+
+def _safe_resolve(path: Path, *, flag: str) -> Path:
+    """Reject ``..`` segments in ``path`` and return its canonical form.
+
+    Click's ``exists=True`` on a file option only checks the target
+    resolves to a real file; it does not stop an operator from walking
+    out of the project tree via ``..``. Mirrors the
+    ``_reject_path_traversal`` validator in ``settings.py``.
+    """
+    if any(part == ".." for part in path.parts):
+        raise click.ClickException(
+            f"'..' segments are not allowed in {flag}: {path!s}"
+        )
+    return path.resolve()
 
 
 def _run_ingest(
@@ -147,6 +165,28 @@ def _run_ingest(
                 error_type=type(exc).__name__,
             )
             raise
+        except Exception as exc:
+            # Anything not derived from PipelineError (PolarsError, OSError,
+            # KeyboardInterrupt derivatives, etc.) would otherwise orphan the
+            # IN_PROGRESS row and surface as a raw traceback. Mark the row
+            # FAILED with the real class name, then re-raise as IngestError
+            # so the outer PipelineError handler formats it uniformly.
+            duration_ms = int((time.monotonic() - started_wall) * 1000)
+            manifest.mark_failed(
+                batch_id=identity.batch_id,
+                finished_at=_iso_now(),
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            logger.exception(
+                "ingest.failed",
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+            )
+            raise IngestError(
+                f"unexpected {type(exc).__name__} during ingest: {exc}"
+            ) from exc
 
         duration_ms = int((time.monotonic() - started_wall) * 1000)
         manifest.mark_completed(
