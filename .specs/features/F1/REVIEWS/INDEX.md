@@ -119,3 +119,30 @@ Scope: commits `a5f7b00` (cache) and `515e0da` (client).
 | 9 | Later-pain | critic | Fallback response is cached under the *primary* model's key — an explicit `model=fallback` re-call would miss | **Accepted** — intended: the cache replays what the caller asked for, not what the SDK actually served |
 | 10 | Later-pain | critic | Empty-text response (tool-use-only) silently cached | **Fixed** — `_one_call` now raises `LLMCallError` instead of caching an empty response; regression test added |
 | 11 | Nitpick | critic | `FakeAnthropic.messages.create` accepts any kwargs — SDK signature changes would pass CI silently | **Accepted** — the Protocol catches the first layer of drift; full SDK-contract tests belong in F1.8 smoke run |
+
+## F1.9 — M1 close (2026-04-23)
+
+Holistic pass across the entire F1 diff (`3398dbc..a77dd76`). Reports:
+
+| Source | Report |
+|---|---|
+| reviewer-pipeline (M1 close) | [F1.9-m1-close.md](./F1.9-m1-close.md) |
+| critic (M1 close) | [F1.9-critic.md](./F1.9-critic.md) |
+
+**Combined verdict:** SHIP M1. All ROADMAP M1 exit criteria met. No blocking findings.
+
+### Carry-forward items for F2 (the three things that will trip us up first)
+
+1. **`LLMClient.cached_call` signature expansion** — Silver will need structured output / batch / streaming. Plan a request-object refactor before the first Silver LLM call lands.
+2. **Lineage-column helper** — `transform_to_bronze` duplicates `batch_id + ingested_at + source_file_hash`. Extract before writing `transform_to_silver`.
+3. **`runs` table API** — DDL exists but `ManifestDB` has no writers. F2 Silver runs need `insert_run` / `mark_run_completed` / `mark_run_failed`.
+
+### Invariants that must NOT change without a deliberate ADR
+
+1. Bronze `pl.Schema` + Enum closed sets (`src/pipeline/schemas/bronze.py`).
+2. `batches` table DDL (`src/pipeline/schemas/manifest.py`). Silver/Gold depend on the `batch_id` FK.
+3. `compute_cache_key` hash algorithm (`src/pipeline/llm/cache.py`). Any change invalidates every cached LLM response; version the algorithm if ever altered.
+
+### Single prototype to de-risk F2
+
+Build a 100-line `SilverOrchestrator` that reads one Bronze partition, sends 5 conversations to `LLMClient.cached_call` with a real `qwen3-max` call, writes one Silver parquet. That one script forces resolution of: Enum round-trip in practice, prompt template shape, SQLite WAL contention when both `ManifestDB` and `LLMCache` hold the file, `runs` table writers, and actual `qwen3-max` latency measurement. Cheaper than discovering any of those in-flight during F2.

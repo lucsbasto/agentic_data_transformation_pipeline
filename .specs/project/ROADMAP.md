@@ -13,9 +13,11 @@ Pipeline mínimo executável + cliente LLM com cache. Sem inteligência ainda; s
 
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
-| **F1 — Bronze ingest + LLMClient base** | 🔵 pending | — | Medium |
+| **F1 — Bronze ingest + LLMClient base** | ✅ shipped (2026-04-23) | — | Medium |
 
 **Critério de fim do M1:** `python -m pipeline ingest` lê o parquet, escreve Bronze particionado, registra batch_id no manifest. `LLMClient.cached_call()` funciona com cache hit/miss. Testes verdes.
+
+**Status da entrega:** smoke run em 322 ms para 153.228 linhas (Bronze zstd 4,2 MB). 110 testes verdes, cobertura 96%, ruff + mypy strict limpos. Lane de review de 3 agentes (code-reviewer + security-reviewer + critic) + sweep final `F1.9` assinaram M1. Detalhes em `.specs/features/F1/REVIEWS/INDEX.md`.
 
 ---
 
