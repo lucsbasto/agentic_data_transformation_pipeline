@@ -88,3 +88,13 @@ def test_state_db_path_resolves_relative_against_project_root(
     resolved = settings.state_db_path()
     assert resolved.is_absolute()
     assert resolved.name == "manifest.db"
+
+
+def test_state_db_rejects_parent_dir_traversal(
+    clean_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_STATE_DB", "../../tmp/evil.db")
+    with pytest.raises(ConfigError, match=r"'\.\.' segments are not allowed"):
+        Settings.load()

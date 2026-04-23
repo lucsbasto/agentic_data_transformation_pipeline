@@ -51,6 +51,22 @@ class Settings(BaseSettings):
             raise ValueError(f"invalid log level: {value!r} (allowed: {sorted(allowed)})")
         return upper
 
+    @field_validator("pipeline_state_db")
+    @classmethod
+    def _reject_path_traversal(cls, value: Path) -> Path:
+        """Block ``..`` segments in the configured state DB path.
+
+        An attacker (or a mistyped env var) could otherwise point the
+        manifest outside the project tree with ``../../tmp/evil.db``.
+        Absolute paths are accepted as-is; ``..`` segments are rejected
+        regardless of absolute/relative form.
+        """
+        if any(part == ".." for part in value.parts):
+            raise ValueError(
+                f"'..' segments are not allowed in PIPELINE_STATE_DB: {value!s}"
+            )
+        return value
+
     def state_db_path(self) -> Path:
         """Resolve ``pipeline_state_db`` against the project root when relative."""
         path = self.pipeline_state_db

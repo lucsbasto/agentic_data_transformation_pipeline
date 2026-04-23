@@ -7,6 +7,7 @@ import logging as stdlib_logging
 
 import pytest
 import structlog
+from pydantic import SecretStr
 
 from pipeline.logging import (
     _reset_for_tests,
@@ -90,3 +91,28 @@ def test_stdlib_logging_respects_configured_level() -> None:
     assert stdlib_logging.getLogger().level == stdlib_logging.ERROR
     # Verify structlog also honors the filter.
     assert structlog.is_configured()
+
+
+def test_redacts_secretstr_value(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO")
+    get_logger("test").info("got.creds", payload=SecretStr("hunter2"))
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["payload"] == "***REDACTED***"
+
+
+def test_redacts_by_key_name(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO")
+    get_logger("test").info(
+        "call.ok",
+        api_key="sk-abcdefgh",
+        auth_token="bearer-xyz",
+        password="hunter2",
+        secret_blob="nested",
+        harmless_field="visible",
+    )
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["api_key"] == "***REDACTED***"
+    assert payload["auth_token"] == "***REDACTED***"
+    assert payload["password"] == "***REDACTED***"
+    assert payload["secret_blob"] == "***REDACTED***"
+    assert payload["harmless_field"] == "visible"

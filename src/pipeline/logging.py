@@ -12,14 +12,38 @@ module.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from typing import Any
 
 import structlog
-from structlog.typing import FilteringBoundLogger
+from pydantic import SecretStr
+from structlog.typing import EventDict, FilteringBoundLogger, WrappedLogger
 
 # Module-level flag stored in a dict to dodge ``global`` (ruff PLW0603).
 _state: dict[str, bool] = {"configured": False}
+
+_SECRET_KEY_RE: re.Pattern[str] = re.compile(
+    r"(secret|password|api[_\-]?key|token|auth)",
+    re.IGNORECASE,
+)
+_REDACTED: str = "***REDACTED***"
+
+
+def _redact_secrets(
+    _logger: WrappedLogger,
+    _method_name: str,
+    event_dict: EventDict,
+) -> EventDict:
+    """Scrub values whose keys hint at credentials before rendering.
+
+    Runs before ``JSONRenderer`` so redacted values never hit stdout. Any
+    :class:`pydantic.SecretStr` value is redacted regardless of key name.
+    """
+    for key, value in list(event_dict.items()):
+        if isinstance(value, SecretStr) or _SECRET_KEY_RE.search(str(key)):
+            event_dict[key] = _REDACTED
+    return event_dict
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -43,6 +67,7 @@ def configure_logging(level: str = "INFO") -> None:
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
+            _redact_secrets,  # scrub before rendering
             structlog.processors.JSONRenderer(sort_keys=True),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(numeric_level),
