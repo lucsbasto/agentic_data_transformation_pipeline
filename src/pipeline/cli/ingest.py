@@ -9,6 +9,14 @@ against an unchanged source is a manifest hit, not a double write.
 
 from __future__ import annotations
 
+# LEARN: two stdlib utilities used below:
+#   - ``time.monotonic()`` — a clock that NEVER goes backwards, even if
+#     the system clock is adjusted. Use it for measuring durations.
+#     NEVER use ``datetime.now()`` for "how long did X take" — a clock
+#     change mid-run would produce negative durations.
+#   - ``uuid.uuid4().hex[:12]`` — short random identifier for logs.
+#     ``uuid4`` is cryptographically random; ``[:12]`` keeps log lines
+#     readable while staying collision-resistant for operator grepping.
 import time
 import uuid
 from datetime import UTC, datetime
@@ -35,10 +43,22 @@ def _default_source() -> Path:
     return data_raw_dir() / "conversations_bronze.parquet"
 
 
+# LEARN: ``@click.command(name="ingest")`` turns this function into a
+# CLI command named ``ingest``. ``@click.option(...)`` stacks add
+# command-line flags. Order matters: decorators apply BOTTOM-UP, so
+# ``--bronze-root`` is actually added before ``--source`` at the
+# underlying click level — harmless, but worth knowing.
 @click.command(name="ingest")
 @click.option(
     "--source",
+    # LEARN: ``click.Path(path_type=Path, ...)`` converts the raw
+    # string to a ``pathlib.Path`` automatically. ``exists=True`` makes
+    # click refuse to run if the file is missing. ``dir_okay=False``
+    # narrows the accepted inputs to regular files.
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    # LEARN: passing a *callable* as ``default`` defers the lookup
+    # until runtime — important because ``project_root()`` walks the
+    # filesystem and we do not want that to run at import time.
     default=_default_source,
     show_default=True,
     help="Raw parquet to ingest into Bronze.",
@@ -52,14 +72,23 @@ def _default_source() -> Path:
 )
 def ingest(source: Path, bronze_root: Path) -> None:
     """Read the raw parquet, cast to Bronze, and register the batch."""
+    # LEARN: harden operator input before trusting it anywhere else. We
+    # reject ``..`` segments, then canonicalize via ``.resolve()``.
     source = _safe_resolve(source, flag="--source")
     bronze_root = _safe_resolve(bronze_root, flag="--bronze-root")
 
+    # LEARN: load env config once at the entrypoint. Deeper callees
+    # receive ``settings`` as an explicit argument — no globals, no
+    # hidden reads. Cleaner to test and to reason about.
     settings = Settings.load()
     configure_logging(settings.pipeline_log_level)
     logger = get_logger("pipeline.ingest")
 
     run_id = uuid.uuid4().hex[:12]
+    # LEARN: wipe any leftover context from a previous command (tests
+    # share the same process), then bind this run's correlation id. Any
+    # log event emitted while this run is active will carry ``run_id``
+    # without callees having to pass it explicitly.
     clear_context()
     bind_context(run_id=run_id)
 
@@ -72,13 +101,21 @@ def ingest(source: Path, bronze_root: Path) -> None:
             settings=settings,
         )
     except PipelineError as exc:
+        # LEARN: ``logger.exception`` logs at ERROR level AND attaches
+        # the current traceback. Pair with the existing structured
+        # fields so operators get both the why and the where.
         logger.exception(
             "ingest.failed",
             error_type=type(exc).__name__,
             error_message=str(exc),
         )
+        # LEARN: ``click.ClickException`` is click's "soft" failure —
+        # exits with status 1 and prints the message WITHOUT a Python
+        # traceback. Better UX for operators than a raw crash.
         raise click.ClickException(str(exc)) from exc
     finally:
+        # LEARN: ``finally`` always runs. Clearing the context prevents
+        # leaking ``run_id`` into a *next* command in the same process.
         clear_context()
 
 
@@ -104,15 +141,32 @@ def _run_ingest(
     settings: Settings,
 ) -> None:
     logger = get_logger("pipeline.ingest")
+    # LEARN: compute the deterministic batch id BEFORE opening the DB.
+    # If the input file is broken (unreadable), we fail fast without
+    # leaving an ``IN_PROGRESS`` row behind.
     identity = compute_batch_identity(source)
     bind_context(batch_id=identity.batch_id)
 
+    # LEARN: ``with ManifestDB(...) as manifest`` uses the context-
+    # manager protocol from ``state/manifest.py``. ``__enter__`` opens
+    # the connection, ``__exit__`` closes it — even if the ``with``
+    # body raises. No manual ``close()`` in the happy path.
     with ManifestDB(settings.state_db_path()) as manifest:
+        # LEARN: idempotency check #1 — the exact batch is already
+        # COMPLETED. Short-circuit with a log line and an operator-
+        # friendly echo. Re-running the ingest CLI on an unchanged file
+        # is therefore free (no double write, no wasted time).
         if manifest.is_batch_completed(identity.batch_id):
             logger.info("ingest.skip.already_completed")
             click.echo(f"batch {identity.batch_id} already ingested; nothing to do.")
             return
 
+        # LEARN: idempotency check #2 — the batch exists but is NOT
+        # completed (``IN_PROGRESS`` from a crash, ``FAILED`` from a
+        # previous bug). ``reset_stale`` sweeps only IN_PROGRESS, so a
+        # FAILED row would collide on the primary key here. We delete
+        # the stale row explicitly. ON DELETE CASCADE in the DDL means
+        # any child ``runs`` rows drop with it — no orphans.
         prior = manifest.get_batch(identity.batch_id)
         if prior is not None and not prior.is_completed:
             logger.info(
@@ -123,6 +177,9 @@ def _run_ingest(
             manifest.delete_batch(identity.batch_id)
 
         started_at = _iso_now()
+        # LEARN: capture ``time.monotonic()`` for a duration stopwatch,
+        # but use ``_iso_now()`` (wall clock) for the timestamp shown
+        # in logs and the manifest. Two clocks, two purposes.
         started_wall = time.monotonic()
         manifest.insert_batch(
             batch_id=identity.batch_id,
@@ -138,6 +195,10 @@ def _run_ingest(
         )
 
         try:
+            # LEARN: the Bronze flow — lazy scan, validate columns,
+            # build typed lazy plan, collect, write to parquet.
+            # Everything stays lazy until ``collect_bronze`` forces
+            # execution, which is where Polars actually runs the casts.
             lf = scan_source(source)
             validate_source_columns(lf)
             typed = transform_to_bronze(
@@ -151,6 +212,9 @@ def _run_ingest(
                 df, bronze_root=bronze_root, batch_id=identity.batch_id
             )
         except PipelineError as exc:
+            # LEARN: first failure branch — our own typed errors. Mark
+            # the batch FAILED with the real class name, then re-raise
+            # to bubble up to the outer click handler.
             duration_ms = int((time.monotonic() - started_wall) * 1000)
             manifest.mark_failed(
                 batch_id=identity.batch_id,
@@ -166,11 +230,13 @@ def _run_ingest(
             )
             raise
         except Exception as exc:
-            # Anything not derived from PipelineError (PolarsError, OSError,
-            # KeyboardInterrupt derivatives, etc.) would otherwise orphan the
-            # IN_PROGRESS row and surface as a raw traceback. Mark the row
-            # FAILED with the real class name, then re-raise as IngestError
-            # so the outer PipelineError handler formats it uniformly.
+            # LEARN: second failure branch — exceptions that are NOT
+            # ``PipelineError`` (PolarsError, OSError, KeyboardInterrupt
+            # derivatives, etc.). Without this branch they would orphan
+            # the IN_PROGRESS row and surface as a raw traceback. We
+            # mark FAILED with the real class name, then re-raise as
+            # ``IngestError`` so the outer handler formats it uniformly.
+            # The ``raise ... from exc`` keeps the original traceback.
             duration_ms = int((time.monotonic() - started_wall) * 1000)
             manifest.mark_failed(
                 batch_id=identity.batch_id,
@@ -188,6 +254,9 @@ def _run_ingest(
                 f"unexpected {type(exc).__name__} during ingest: {exc}"
             ) from exc
 
+        # LEARN: happy path — commit the batch row as COMPLETED with
+        # the row counts, bronze path, and total duration. Only reached
+        # when no exception fired inside the ``try`` block above.
         duration_ms = int((time.monotonic() - started_wall) * 1000)
         manifest.mark_completed(
             batch_id=identity.batch_id,
