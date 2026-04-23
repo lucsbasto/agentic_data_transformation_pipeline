@@ -78,23 +78,26 @@ def assert_bronze_schema(df: pl.DataFrame) -> None:
         )
 
 
-def wrap_cast_error(exc: pl_exc.PolarsError) -> SchemaDriftError:
-    """Convert a Polars cast error into a domain ``SchemaDriftError``.
+def collect_bronze(lf: pl.LazyFrame) -> pl.DataFrame:
+    """Materialize a Bronze lazy plan, converting Polars cast errors.
 
-    Callers that invoke ``transform_to_bronze(...).collect()`` should
-    catch :class:`polars.exceptions.PolarsError` and route it through
-    this helper so the pipeline's error vocabulary stays consistent.
+    Every Bronze collect in the pipeline goes through this helper so that
+    enum drift, timestamp parse failures, and other cast issues surface
+    as :class:`SchemaDriftError` instead of raw Polars exceptions.
     """
-    return SchemaDriftError(
-        f"source violates Bronze contract during cast: {exc}"
-    )
+    try:
+        return lf.collect()
+    except pl_exc.PolarsError as exc:
+        raise SchemaDriftError(
+            f"source violates Bronze contract during cast: {exc}"
+        ) from exc
 
 
 __all__ = [
     "SOURCE_COLUMNS",
     "assert_bronze_schema",
+    "collect_bronze",
     "transform_to_bronze",
-    "wrap_cast_error",
 ]
 
 

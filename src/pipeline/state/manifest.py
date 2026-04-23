@@ -230,6 +230,19 @@ class ManifestDB:
         batch = self.get_batch(batch_id)
         return batch is not None and batch.is_completed
 
+    def delete_batch(self, batch_id: str) -> bool:
+        """Remove a batch row unconditionally. Returns True if a row was deleted.
+
+        This exists for the retry-after-FAILED path: ``reset_stale`` only
+        sweeps ``IN_PROGRESS`` rows, so a batch that already has a FAILED
+        row would collide on the primary key when a retry inserts again.
+        Callers who *know* they want to restart that specific batch call
+        this helper explicitly; automatic retry is not implied.
+        """
+        with self._transaction() as cur:
+            cur.execute("DELETE FROM batches WHERE batch_id = ?;", (batch_id,))
+            return cur.rowcount > 0
+
     # ------------------------------------------------------------------ internals
 
     def _require_conn(self) -> sqlite3.Connection:

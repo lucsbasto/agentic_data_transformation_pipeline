@@ -19,6 +19,7 @@ from pipeline.ingest import (
     validate_source_columns,
     write_bronze,
 )
+from pipeline.ingest.transform import collect_bronze
 from pipeline.state.manifest import ManifestDB
 
 pytestmark = pytest.mark.integration
@@ -34,6 +35,12 @@ def _ingest(
     identity = compute_batch_identity(source)
     if manifest.is_batch_completed(identity.batch_id):
         return identity.batch_id
+
+    # A prior FAILED row for this batch would collide on the PK; drop it so
+    # the retry can re-insert cleanly. reset_stale only handles IN_PROGRESS.
+    existing = manifest.get_batch(identity.batch_id)
+    if existing is not None and not existing.is_completed:
+        manifest.delete_batch(identity.batch_id)
 
     started = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     manifest.insert_batch(
@@ -52,7 +59,7 @@ def _ingest(
             source_hash=identity.source_hash,
             ingested_at=datetime.now(tz=UTC),
         )
-        df = typed.collect()
+        df = collect_bronze(typed)
         result = write_bronze(df, bronze_root=bronze_root, batch_id=identity.batch_id)
     except Exception as exc:
         manifest.mark_failed(
@@ -119,3 +126,41 @@ def test_ingest_is_idempotent_on_second_run(
             manifest=manifest,
         )
     assert first == second
+
+
+def test_ingest_retries_after_failed_row(
+    tiny_source_parquet: Path, tmp_path: Path
+) -> None:
+    """Simulate a crashed ingest that left a FAILED row, then retry."""
+    bronze_root = tmp_path / "bronze"
+    db_path = tmp_path / "manifest.db"
+    identity = compute_batch_identity(tiny_source_parquet)
+
+    with ManifestDB(db_path) as manifest:
+        # Arrange: a prior FAILED row for this batch_id.
+        manifest.insert_batch(
+            batch_id=identity.batch_id,
+            source_path=str(tiny_source_parquet),
+            source_hash=identity.source_hash,
+            source_mtime=identity.source_mtime,
+            started_at="2026-04-22T00:00:00Z",
+        )
+        manifest.mark_failed(
+            batch_id=identity.batch_id,
+            finished_at="2026-04-22T00:00:01Z",
+            duration_ms=1,
+            error_type="BoomError",
+            error_message="prior attempt blew up",
+        )
+        # Act: retry through the same helper. Must succeed, not raise PK error.
+        batch_id = _ingest(
+            source=tiny_source_parquet,
+            bronze_root=bronze_root,
+            manifest=manifest,
+        )
+        row = manifest.get_batch(batch_id)
+
+    assert row is not None
+    assert row.is_completed
+    assert row.error_type is None  # cleared by mark_completed
+    assert row.error_message is None

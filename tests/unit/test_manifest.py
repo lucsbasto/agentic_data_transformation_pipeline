@@ -198,3 +198,13 @@ def test_update_with_invalid_status_raises(db: ManifestDB) -> None:
             finished_at="t",
             duration_ms=0,
         )
+
+
+def test_delete_batch_removes_existing_row(db: ManifestDB) -> None:
+    _insert(db)
+    assert db.delete_batch("b1") is True
+    assert db.get_batch("b1") is None
+
+
+def test_delete_batch_returns_false_for_missing(db: ManifestDB) -> None:
+    assert db.delete_batch("missing") is False

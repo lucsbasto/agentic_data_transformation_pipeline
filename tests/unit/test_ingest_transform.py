@@ -5,14 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import polars as pl
-import polars.exceptions as pl_exc
 import pytest
 
 from pipeline.errors import SchemaDriftError
 from pipeline.ingest.transform import (
     assert_bronze_schema,
+    collect_bronze,
     transform_to_bronze,
-    wrap_cast_error,
 )
 from pipeline.schemas.bronze import BRONZE_SCHEMA
 
@@ -74,14 +73,22 @@ def test_transform_rejects_unknown_enum_value(
         source_hash="x" * 64,
         ingested_at=_ingested_at(),
     )
-    try:
-        lf.collect()
-    except pl_exc.PolarsError as exc:
-        drift = wrap_cast_error(exc)
-        assert isinstance(drift, SchemaDriftError)
-        assert "violates Bronze contract" in str(drift)
-    else:
-        pytest.fail("expected a PolarsError on unknown enum value")
+    with pytest.raises(SchemaDriftError, match="violates Bronze contract"):
+        collect_bronze(lf)
+
+
+def test_collect_bronze_returns_dataframe_for_valid_input(
+    tiny_source_df: pl.DataFrame,
+) -> None:
+    lf = transform_to_bronze(
+        tiny_source_df.lazy(),
+        batch_id="b",
+        source_hash="x" * 64,
+        ingested_at=_ingested_at(),
+    )
+    df = collect_bronze(lf)
+    assert df.height == tiny_source_df.height
+    assert df.schema == BRONZE_SCHEMA
 
 
 def test_assert_bronze_schema_detects_extra_column(

@@ -76,17 +76,28 @@ def test_write_bronze_cleans_tmp_on_failure(
     assert not (tmp_path / "batch_id=b-fail").exists()
 
 
-def test_write_bronze_round_trip_preserves_schema(
+def test_write_bronze_round_trip_preserves_enum_dtype(
     tiny_source_df: pl.DataFrame, tmp_path: Path
 ) -> None:
+    """Contract test: parquet round-trip preserves ``pl.Enum`` metadata.
+
+    This pins the downstream invariant that Silver readers can rely on
+    Enum dtype (and its closed category list) without re-casting. If a
+    future Polars upgrade changes this, Silver readers must update their
+    expectations — catching the change here is cheaper than catching it
+    in production logs.
+    """
     df = _bronze_df(tiny_source_df)
     result = write_bronze(df, bronze_root=tmp_path, batch_id="b-rt")
     reloaded = pl.scan_parquet(result.bronze_path).collect()
-    # All closed-set columns survive as strings on re-read (Polars loses Enum
-    # metadata in the on-disk round trip unless we persist it). Verify the
-    # data values match instead of the dtypes.
     assert reloaded.height == df.height
+
     for col in ("direction", "status", "message_type"):
-        assert sorted(reloaded[col].unique().to_list()) == sorted(
-            df[col].cast(pl.String).unique().to_list()
+        dtype = reloaded.schema[col]
+        assert isinstance(dtype, pl.Enum), (
+            f"{col} lost Enum dtype on round-trip (got {dtype!r}); if that "
+            "is intentional, Silver needs an explicit re-cast."
+        )
+        assert sorted(dtype.categories.to_list()) == sorted(
+            df.schema[col].categories.to_list()  # type: ignore[union-attr]
         )
