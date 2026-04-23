@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     pipeline_loop_sleep_seconds: int = Field(default=60, ge=1, le=3600)
     pipeline_state_db: Path = Field(default=Path("state/manifest.db"))
     pipeline_log_level: str = Field(default="INFO")
+    pipeline_llm_response_cap: int = Field(
+        default=200_000,
+        ge=1,
+        description=(
+            "Maximum characters accepted from a single provider response "
+            "before it is cached. A hostile or broken upstream can otherwise "
+            "poison the SQLite cache with an unbounded blob."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

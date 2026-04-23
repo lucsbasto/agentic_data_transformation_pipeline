@@ -229,6 +229,31 @@ def test_empty_text_response_raises(settings: Settings, cache: LLMCache) -> None
         client.cached_call(system="s", user="u")
 
 
+def test_oversize_response_is_rejected(
+    cache: LLMCache,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A response over ``pipeline_llm_response_cap`` must raise instead of being cached."""
+    for key in [
+        "ANTHROPIC_API_KEY",
+        "PIPELINE_LLM_RESPONSE_CAP",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LLM_RESPONSE_CAP", "10")
+    monkeypatch.chdir(tmp_path)
+    tight = Settings.load()
+
+    client, _fake = _make_client(tight, cache, [_fake_message("x" * 20)])
+    with pytest.raises(LLMCallError, match="exceeds pipeline_llm_response_cap=10"):
+        client.cached_call(system="s", user="u")
+    # Oversize response must not have landed in the cache.
+    assert cache._conn is not None
+    (count,) = cache._conn.execute("SELECT COUNT(*) FROM llm_cache;").fetchone()
+    assert count == 0
+
+
 def test_construction_with_default_anthropic(
     settings: Settings, cache: LLMCache, monkeypatch: pytest.MonkeyPatch
 ) -> None:

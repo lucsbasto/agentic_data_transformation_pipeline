@@ -299,6 +299,13 @@ class LLMClient:
                 f"LLM returned no text block (model={model!r}, attempt={attempt}); "
                 "refusing to cache an empty response"
             )
+        cap = self._settings.pipeline_llm_response_cap
+        if len(text) > cap:
+            raise LLMCallError(
+                f"LLM response of {len(text)} chars exceeds "
+                f"pipeline_llm_response_cap={cap} (model={model!r}, "
+                f"attempt={attempt}); refusing to cache"
+            )
         usage = getattr(message, "usage", None)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
