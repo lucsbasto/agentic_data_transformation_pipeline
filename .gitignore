@@ -1,0 +1,56 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Pipeline output layers (regenerated; raw input IS committed as test fixture)
+data/bronze/
+data/silver/
+data/gold/
+
+# Runtime state (manifest.db, checkpoints, logs)
+state/
+logs/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Notebooks scratch
+.ipynb_checkpoints/
+*.ipynb_scratch
+
+# OMC runtime (sessions, logs, ephemeral state). Keep only explicit opt-ins later.
+.omc/
