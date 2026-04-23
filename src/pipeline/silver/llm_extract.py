@@ -76,9 +76,14 @@ SYSTEM_PROMPT: Final[str] = (
     "stated.\n"
     '- "concorrente_mencionado" (string | null): name of a competing '
     "insurer if the lead mentions one.\n"
-    '- "valor_pago_atual_brl" (number | null): BRL amount the lead '
-    "currently pays for insurance, as a number "
-    "(no currency symbol).\n"
+    '- "valor_pago_atual_brl" (number | null): BRL amount the LEAD '
+    "(customer) explicitly says they currently pay to their EXISTING "
+    "insurer, as a number (no currency symbol). Return null when the "
+    "figure comes from the agent/seller quoting or offering a new "
+    "price (e.g. 'consigo fazer por R$ X', 'fica R$ X', 'posso "
+    "abaixar pra R$ X', 'plano básico R$ X/ano'). Return null when "
+    "it is unclear whether the figure is a current lead-paid premium "
+    "versus a quoted or discounted offer.\n"
     '- "sinistro_historico" (boolean | null): true if the lead '
     "explicitly states a prior accident or claim, false if they "
     "explicitly deny one, null otherwise.\n\n"
