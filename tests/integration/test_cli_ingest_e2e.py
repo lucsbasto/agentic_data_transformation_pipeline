@@ -33,9 +33,11 @@ def _run_ingest(
         "PIPELINE_LOOP_SLEEP_SECONDS",
         "PIPELINE_STATE_DB",
         "PIPELINE_LOG_LEVEL",
+        "PIPELINE_LEAD_SECRET",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     # Absolute path so it is not re-rooted against the real repo's project_root.
     state_db = tmp_path / "manifest.db"
     monkeypatch.setenv("PIPELINE_STATE_DB", str(state_db))
@@ -95,6 +97,7 @@ def test_cli_ingest_missing_source_is_click_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(
@@ -110,6 +113,7 @@ def test_cli_ingest_rejects_path_traversal_in_bronze_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     monkeypatch.setenv("PIPELINE_STATE_DB", str(tmp_path / "manifest.db"))
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
