@@ -208,3 +208,30 @@ def test_delete_batch_removes_existing_row(db: ManifestDB) -> None:
 
 def test_delete_batch_returns_false_for_missing(db: ManifestDB) -> None:
     assert db.delete_batch("missing") is False
+
+
+def test_busy_timeout_pragma_set(db: ManifestDB) -> None:
+    assert db._conn is not None
+    (value,) = db._conn.execute("PRAGMA busy_timeout;").fetchone()
+    assert value == 5000
+
+
+def test_delete_batch_cascades_to_runs(db: ManifestDB) -> None:
+    _insert(db)
+    assert db._conn is not None
+    db._conn.execute(
+        "INSERT INTO runs (run_id, batch_id, layer, status, started_at) "
+        "VALUES (?, ?, ?, ?, ?);",
+        ("r1", "b1", "silver", "IN_PROGRESS", "2026-04-22T12:00:00Z"),
+    )
+    remaining = db._conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE batch_id = ?;", ("b1",)
+    ).fetchone()[0]
+    assert remaining == 1
+
+    assert db.delete_batch("b1") is True
+
+    remaining = db._conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE batch_id = ?;", ("b1",)
+    ).fetchone()[0]
+    assert remaining == 0

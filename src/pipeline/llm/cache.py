@@ -84,6 +84,7 @@ class LLMCache:
             target = self._db_path
         conn = sqlite3.connect(target, isolation_level=None)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000;")
         if target != ":memory:":
             conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute(LLM_CACHE_DDL)

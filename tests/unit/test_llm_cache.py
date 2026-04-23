@@ -139,3 +139,9 @@ def test_file_backed_cache_creates_parent_dir(tmp_path: Path) -> None:
     with LLMCache(nested) as c:
         _put(c, "k1")
     assert nested.is_file()
+
+
+def test_busy_timeout_pragma_set(cache: LLMCache) -> None:
+    assert cache._conn is not None
+    (value,) = cache._conn.execute("PRAGMA busy_timeout;").fetchone()
+    assert value == 5000

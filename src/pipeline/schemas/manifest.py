@@ -45,7 +45,7 @@ RUN_STATUSES: Final[tuple[str, ...]] = (
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id              TEXT PRIMARY KEY,
-    batch_id            TEXT NOT NULL REFERENCES batches(batch_id),
+    batch_id            TEXT NOT NULL REFERENCES batches(batch_id) ON DELETE CASCADE,
     layer               TEXT NOT NULL CHECK (layer IN ('bronze','silver','gold')),
     status              TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','COMPLETED','FAILED')),
     started_at          TEXT NOT NULL,
