@@ -234,6 +234,40 @@ def test_silver_transform_extractors_null_safe_on_empty_body() -> None:
     assert out["plate_format"][0] is None
 
 
+# ---------------------------------------------------------------------------
+# Audio confidence flag
+# ---------------------------------------------------------------------------
+
+
+def test_silver_transform_flags_noisy_audio_low() -> None:
+    lf = _bronze_frame(
+        [_bronze_row(message_type="audio", message_body="oi [inaudível] teste")]
+    )
+    out = _run_silver(lf)
+    assert out["audio_confidence"][0] == "low"
+
+
+def test_silver_transform_marks_clean_audio_high() -> None:
+    lf = _bronze_frame(
+        [
+            _bronze_row(
+                message_type="audio",
+                message_body="oi gostaria de cotar um seguro para meu corolla",
+            )
+        ]
+    )
+    out = _run_silver(lf)
+    assert out["audio_confidence"][0] == "high"
+
+
+def test_silver_transform_audio_confidence_is_null_for_text() -> None:
+    lf = _bronze_frame(
+        [_bronze_row(message_type="text", message_body="any text body here")]
+    )
+    out = _run_silver(lf)
+    assert out["audio_confidence"][0] is None
+
+
 def test_silver_transform_masks_sender_phone() -> None:
     lf = _bronze_frame([_bronze_row(sender_phone="11987654321")])
     out = _run_silver(lf)

@@ -33,6 +33,7 @@ import polars as pl
 
 from pipeline.errors import SchemaDriftError
 from pipeline.schemas.silver import SILVER_COLUMNS, SILVER_SCHEMA
+from pipeline.silver.audio import audio_confidence_expr
 from pipeline.silver.dedup import dedup_events
 from pipeline.silver.extract import (
     extract_cep_prefix_expr,
@@ -163,6 +164,9 @@ def silver_transform(
                 "has_phone_mention"
             ),
             extract_plate_format_expr(pl.col("message_body")).alias("plate_format"),
+            audio_confidence_expr(
+                pl.col("message_type"), pl.col("message_body")
+            ).alias("audio_confidence"),
             pl.col("campaign_id"),
             pl.col("agent_id"),
             pl.col("direction"),

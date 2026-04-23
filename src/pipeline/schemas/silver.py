@@ -130,6 +130,13 @@ _SILVER_FIELDS: dict[str, pl.DataType] = {
     "cep_prefix": pl.String(),
     "has_phone_mention": pl.Boolean(),
     "plate_format": pl.String(),
+    # --- audio transcription confidence (F2) ----------------------------------
+    # LEARN: ``"high"`` / ``"low"`` for audio rows, ``null`` for every
+    # other message_type. The three-valued signal is honest about the
+    # column not applying to text/sticker/etc. Gold filters like
+    # ``audio_confidence != 'low'`` therefore do not accidentally drop
+    # non-audio rows.
+    "audio_confidence": pl.String(),
     # --- passthrough (Bronze -> Silver unchanged) -----------------------------
     "campaign_id": pl.String(),
     "agent_id": pl.String(),
