@@ -35,6 +35,10 @@ class IngestError(PipelineError):
     """Non-schema failure during ingest (I/O, atomic rename, validation)."""
 
 
+class SilverError(PipelineError):
+    """Non-schema failure during the Bronze → Silver transform."""
+
+
 class ManifestError(PipelineError):
     """SQLite manifest access failed or the row shape is unexpected."""
 
