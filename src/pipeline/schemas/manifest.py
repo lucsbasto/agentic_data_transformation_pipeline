@@ -32,12 +32,22 @@ BATCHES_INDEXES: Final[tuple[str, ...]] = (
     "CREATE INDEX IF NOT EXISTS idx_batches_started ON batches(started_at);",
 )
 
+RUN_STATUS_IN_PROGRESS: Final[str] = "IN_PROGRESS"
+RUN_STATUS_COMPLETED: Final[str] = "COMPLETED"
+RUN_STATUS_FAILED: Final[str] = "FAILED"
+
+RUN_STATUSES: Final[tuple[str, ...]] = (
+    RUN_STATUS_IN_PROGRESS,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+)
+
 RUNS_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id              TEXT PRIMARY KEY,
     batch_id            TEXT NOT NULL REFERENCES batches(batch_id),
     layer               TEXT NOT NULL CHECK (layer IN ('bronze','silver','gold')),
-    status              TEXT NOT NULL,
+    status              TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','COMPLETED','FAILED')),
     started_at          TEXT NOT NULL,
     finished_at         TEXT,
     rows_in             INTEGER,
@@ -46,6 +56,12 @@ CREATE TABLE IF NOT EXISTS runs (
     error_message       TEXT
 );
 """
+
+RUNS_INDEXES: Final[tuple[str, ...]] = (
+    "CREATE INDEX IF NOT EXISTS idx_runs_batch_id ON runs(batch_id);",
+    "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);",
+    "CREATE INDEX IF NOT EXISTS idx_runs_layer ON runs(layer);",
+)
 
 LLM_CACHE_DDL: Final[str] = """
 CREATE TABLE IF NOT EXISTS llm_cache (
@@ -62,6 +78,7 @@ ALL_DDL: Final[tuple[str, ...]] = (
     BATCHES_DDL,
     *BATCHES_INDEXES,
     RUNS_DDL,
+    *RUNS_INDEXES,
     LLM_CACHE_DDL,
 )
 

@@ -83,6 +83,31 @@ def test_runs_layer_check_constraint() -> None:
         )
 
 
+def test_runs_status_check_constraint() -> None:
+    conn = _apply(ALL_DDL)
+    conn.execute(
+        "INSERT INTO batches (batch_id, source_path, source_hash, "
+        "source_mtime, status, started_at) "
+        "VALUES ('b1','src','h',1,'COMPLETED','2026-04-22T00:00:00Z');"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO runs (run_id, batch_id, layer, status, started_at) "
+            "VALUES ('r1','b1','bronze','BOGUS','2026-04-22T00:00:00Z');"
+        )
+
+
+def test_runs_indexes_exist() -> None:
+    conn = _apply(ALL_DDL)
+    indexes = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        )
+    }
+    assert {"idx_runs_batch_id", "idx_runs_status", "idx_runs_layer"} <= indexes
+
+
 def test_llm_cache_primary_key() -> None:
     conn = _apply(ALL_DDL)
     conn.execute(

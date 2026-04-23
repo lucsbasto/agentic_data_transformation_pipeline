@@ -11,6 +11,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pipeline.errors import ManifestError
@@ -19,6 +20,14 @@ from pipeline.schemas.manifest import (
     BATCH_STATUS_COMPLETED,
     BATCH_STATUS_FAILED,
     BATCH_STATUS_IN_PROGRESS,
+    BATCH_STATUSES,
+)
+
+STALE_ERROR_TYPE: str = "StaleInProgress"
+"""``error_type`` used when crash recovery marks an orphan batch FAILED."""
+
+STALE_ERROR_MESSAGE: str = (
+    "previous process exited without completing this batch"
 )
 
 
@@ -75,9 +84,11 @@ class ManifestDB:
         conn = sqlite3.connect(target, isolation_level=None)  # autocommit off via BEGIN
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA journal_mode = WAL;") if target != ":memory:" else None
+        if target != ":memory:":
+            conn.execute("PRAGMA journal_mode = WAL;")
         self._conn = conn
         self.ensure_schema()
+        self.reset_stale()
         return self
 
     def close(self) -> None:
@@ -94,11 +105,36 @@ class ManifestDB:
     # ------------------------------------------------------------------ schema
 
     def ensure_schema(self) -> None:
-        conn = self._require_conn()
         with self._transaction() as cur:
             for stmt in ALL_DDL:
                 cur.execute(stmt)
-        del conn  # silence unused-warning without suppressing in linters
+
+    def reset_stale(self, *, now_iso: str | None = None) -> int:
+        """Mark orphaned ``IN_PROGRESS`` batches as ``FAILED``.
+
+        A new process starting up means any ``IN_PROGRESS`` row is from a
+        previous process that crashed. Without this sweep, re-running the
+        same batch hits the primary-key constraint on ``batches`` and
+        surfaces as a cryptic ``IntegrityError`` instead of a clean retry.
+
+        Returns the number of rows swept. ``now_iso`` is injectable so tests
+        can assert a deterministic timestamp.
+        """
+        finished_at = now_iso if now_iso is not None else _utcnow_iso()
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE batches SET status = ?, finished_at = ?, "
+                "error_type = ?, error_message = ? "
+                "WHERE status = ?;",
+                (
+                    BATCH_STATUS_FAILED,
+                    finished_at,
+                    STALE_ERROR_TYPE,
+                    STALE_ERROR_MESSAGE,
+                    BATCH_STATUS_IN_PROGRESS,
+                ),
+            )
+            return cur.rowcount
 
     # ------------------------------------------------------------------ writes
 
@@ -142,6 +178,7 @@ class ManifestDB:
         finished_at: str,
         duration_ms: int,
     ) -> None:
+        """Mark a batch COMPLETED and clear any error fields from prior attempts."""
         self._update_status(
             batch_id=batch_id,
             status=BATCH_STATUS_COMPLETED,
@@ -150,6 +187,9 @@ class ManifestDB:
             rows_read=rows_read,
             rows_written=rows_written,
             bronze_path=bronze_path,
+            error_type=None,
+            error_message=None,
+            clear_error_fields=True,
         )
 
     def mark_failed(
@@ -168,6 +208,7 @@ class ManifestDB:
             duration_ms=duration_ms,
             error_type=error_type,
             error_message=error_message,
+            clear_error_fields=False,
         )
 
     # ------------------------------------------------------------------ reads
@@ -183,7 +224,7 @@ class ManifestDB:
         ).fetchone()
         if row is None:
             return None
-        return BatchRow(**{k: row[k] for k in row.keys()})
+        return BatchRow(**dict(row))
 
     def is_batch_completed(self, batch_id: str) -> bool:
         batch = self.get_batch(batch_id)
@@ -226,27 +267,55 @@ class ManifestDB:
         bronze_path: str | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
+        clear_error_fields: bool = False,
     ) -> None:
-        with self._transaction() as cur:
-            cur.execute(
-                "UPDATE batches SET status = ?, finished_at = ?, duration_ms = ?, "
-                "rows_read = COALESCE(?, rows_read), "
-                "rows_written = COALESCE(?, rows_written), "
-                "bronze_path = COALESCE(?, bronze_path), "
-                "error_type = COALESCE(?, error_type), "
-                "error_message = COALESCE(?, error_message) "
-                "WHERE batch_id = ?;",
-                (
-                    status,
-                    finished_at,
-                    duration_ms,
-                    rows_read,
-                    rows_written,
-                    bronze_path,
-                    error_type,
-                    error_message,
-                    batch_id,
-                ),
+        if status not in BATCH_STATUSES:
+            raise ManifestError(
+                f"invalid status {status!r}; expected one of {BATCH_STATUSES}"
             )
+        # Error columns:
+        #   clear_error_fields=True  (used by mark_completed) -> always set to NULL
+        #     so a prior FAILED attempt does not leak errors into a COMPLETED row.
+        #   clear_error_fields=False (used by mark_failed)    -> assign the values.
+        # Lineage columns (rows_read/written, bronze_path) stay COALESCE so that a
+        # later partial update never erases progress recorded earlier in the run.
+        if clear_error_fields:
+            error_clause = "error_type = NULL, error_message = NULL"
+            error_params: tuple[object, ...] = ()
+        else:
+            error_clause = "error_type = ?, error_message = ?"
+            error_params = (error_type, error_message)
+
+        sql = (
+            "UPDATE batches SET status = ?, finished_at = ?, duration_ms = ?, "
+            "rows_read = COALESCE(?, rows_read), "
+            "rows_written = COALESCE(?, rows_written), "
+            "bronze_path = COALESCE(?, bronze_path), "
+            f"{error_clause} "
+            "WHERE batch_id = ?;"
+        )
+        params: tuple[object, ...] = (
+            status,
+            finished_at,
+            duration_ms,
+            rows_read,
+            rows_written,
+            bronze_path,
+            *error_params,
+            batch_id,
+        )
+
+        with self._transaction() as cur:
+            try:
+                cur.execute(sql, params)
+            except sqlite3.IntegrityError as exc:
+                raise ManifestError(
+                    f"integrity error updating batch {batch_id!r}: {exc}"
+                ) from exc
             if cur.rowcount == 0:
                 raise ManifestError(f"no batch row to update: {batch_id!r}")
+
+
+def _utcnow_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string (seconds resolution)."""
+    return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
