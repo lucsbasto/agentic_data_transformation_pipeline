@@ -35,9 +35,10 @@ data/bronze/
 data/silver/
 data/gold/
 
-# Runtime state (manifest.db, checkpoints, logs)
-state/
-logs/
+# Runtime state (manifest.db, checkpoints, logs) at repo root only.
+# Leading slash anchors to the top-level so src/pipeline/state/ is not ignored.
+/state/
+/logs/
 *.log
 
 # IDE / OS
