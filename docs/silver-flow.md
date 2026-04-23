@@ -211,6 +211,24 @@ File: `src/pipeline/silver/extract.py`,
 `src/pipeline/silver/transform.py` (the five extract expressions in
 the main `select`).
 
+### 5f-ter. Audio transcription confidence
+
+Audio rows get a `"high"` / `"low"` tag via `audio_confidence_expr`.
+Low-confidence triggers (any one is enough):
+
+- Known noise marker in the body (`[inaudível]`, `[ruído]`,
+  `[unintelligible]`, `[...]`, `???`).
+- Three or more consecutive dots (transcribers use `"..."` for
+  dropped words).
+- Post-strip body shorter than 10 characters.
+- `message_body` is null.
+
+Non-audio rows (`message_type != "audio"`) pass through as `null` —
+the column is a three-valued signal, not a "does/does not apply"
+boolean.
+
+File: `src/pipeline/silver/audio.py:audio_confidence_expr`.
+
 ### 5g. `has_content` boolean
 
 True when `message_body` is non-null and contains at least one
@@ -345,6 +363,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `pipeline/silver/normalize.py`     | Timestamp, metadata, name normalizers    |
 | `pipeline/silver/pii.py`           | Positional PII maskers                   |
 | `pipeline/silver/extract.py`       | Regex entity extraction (domain/region/format) |
+| `pipeline/silver/audio.py`         | Audio transcription confidence tag     |
 | `pipeline/silver/quarantine.py`    | Row-level validator + rejected-schema  |
 | `pipeline/silver/lead.py`          | Phone normalization + HMAC-SHA256 lead id |
 | `pipeline/silver/reconcile.py`     | Canonical name per lead                  |
@@ -363,6 +382,7 @@ is `silver.complete` with the same fields as structured JSON.
 | `tests/unit/test_silver_normalize.py`              | Timestamp tag, metadata, name norm   |
 | `tests/unit/test_silver_pii.py`                    | Every positional masker              |
 | `tests/unit/test_silver_extract.py`                | Every entity extractor               |
+| `tests/unit/test_silver_audio.py`                  | Audio confidence rule set            |
 | `tests/unit/test_silver_quarantine.py`             | Split rules + rejected schema        |
 | `tests/unit/test_silver_lead.py`                   | Phone normalization, HMAC, idempotence |
 | `tests/unit/test_silver_reconcile.py`              | Canonical-name pick rule             |
