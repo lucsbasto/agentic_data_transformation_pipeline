@@ -47,6 +47,7 @@ logs/
 *.swo
 .DS_Store
 Thumbs.db
+.fuse_hidden*
 
 # Notebooks scratch
 .ipynb_checkpoints/
