@@ -21,30 +21,51 @@ Scope: `3398dbc..382776c` (4 atomic commits).
 
 | # | Severity | Source | Finding | Disposition |
 |---|---|---|---|---|
-| 1 | Critical | critic | `ManifestDB` has no crash recovery — orphaned `IN_PROGRESS` rows block re-runs with `IntegrityError` | **Fix now** (pre-F1.5) |
-| 2 | Medium | code-reviewer | `_update_status` uses `COALESCE(?, error_type)` — cannot clear stale errors when a FAILED batch transitions to COMPLETED | **Fix now** |
-| 3 | Medium | security | `bind_context(**kwargs)` can accidentally bind secrets; structlog has no redaction processor | **Fix now** |
-| 4 | Medium | security | `_update_status` accepts freeform `status`; CHECK constraint catches it but leaks raw `sqlite3.IntegrityError` | **Fix now** |
-| 5 | Low | critic | `runs.status` has no CHECK constraint; `runs` table has no indexes | **Fix now** (cheap, batched) |
-| 6 | Low | security | `pipeline_state_db` relative path not guarded against `..` segments | **Fix now** (cheap, batched) |
-| 7 | Low | code-reviewer | `for k in row.keys()` trips `ruff SIM118` in a file-level ignore scope (still visible in review) | **Fix now** (one-line) |
-| 8 | Low | critic | Tautology tests in `test_errors.py`; `test_enums_reject_unknown_value` uses bare `except Exception` | **Fix now** (tighten assertion) |
-| 9 | Nitpick | critic | `pl.Enum` closures leave zero growth room for new WhatsApp message types | **Defer** — enum-as-drift-sentinel is intentional per D-002 skill `medallion-data-layout`; revisit if drift fires in M2 |
-| 10 | Nitpick | critic | "Self-healing" claim has zero implementation seeds in M1 | **Accept** — claim belongs to F4 (M3); M1 delivers only the foundation |
+| 1 | Critical | critic | `ManifestDB` has no crash recovery — orphaned `IN_PROGRESS` rows block re-runs with `IntegrityError` | **Fixed in e24d1e4** |
+| 2 | Medium | code-reviewer | `_update_status` uses `COALESCE(?, error_type)` — cannot clear stale errors when a FAILED batch transitions to COMPLETED | **Fixed in e24d1e4** |
+| 3 | Medium | security | `bind_context(**kwargs)` can accidentally bind secrets; structlog has no redaction processor | **Fixed in 277d79a** |
+| 4 | Medium | security | `_update_status` accepts freeform `status`; CHECK constraint catches it but leaks raw `sqlite3.IntegrityError` | **Fixed in e24d1e4** |
+| 5 | Low | critic | `runs.status` has no CHECK constraint; `runs` table has no indexes | **Fixed in e24d1e4** |
+| 6 | Low | security | `pipeline_state_db` relative path not guarded against `..` segments | **Fixed in 277d79a** |
+| 7 | Low | code-reviewer | `for k in row.keys()` trips `ruff SIM118` | **Fixed in e24d1e4** |
+| 8 | Low | critic | Tautology tests; `test_enums_reject_unknown_value` uses bare `except Exception` | **Fixed in 61989c1** (enum-rejection routed through `collect_bronze`/`SchemaDriftError`) |
+| 9 | Nitpick | critic | `pl.Enum` closures leave zero growth room for new WhatsApp message types | **Deferred** — enum-as-drift-sentinel is intentional; revisit if drift fires in M2 |
+| 10 | Nitpick | critic | "Self-healing" claim has zero implementation seeds in M1 | **Accepted** — claim belongs to F4 (M3) |
 
-### Pre-F1.5 measurements requested by critic
+## F1.5 (Bronze ingest pipeline, 2026-04-22)
 
-- [ ] Verify exact Polars exception type for `pl.Enum` cast failures (decides how `SchemaDriftError` wraps it).
-- [ ] Prototype atomic-rename across mount points (Bronze writer uses `tmp → final` rename; fails silently across filesystem boundaries).
-- [ ] Measure 153K-row zstd write time (set expectation for M2 full-load budget < 15 min).
-- [ ] Document 48-bit `batch_id` collision bound (we truncate `sha256(source_hash + mtime)` to 12 hex chars).
+Scope: commit `61989c1`.
 
-These become part of the F1.5 design note, not pre-work commits.
+| Source | Report |
+|---|---|
+| code-reviewer | [F1.5-code-review.md](./F1.5-code-review.md) |
+| security-reviewer | [F1.5-security.md](./F1.5-security.md) |
+| critic | [F1.5-critic.md](./F1.5-critic.md) |
+
+### Consolidated severity and disposition
+
+| # | Severity | Source | Finding | Disposition |
+|---|---|---|---|---|
+| 1 | Medium | code-reviewer | `writer.py:64-66` non-atomic directory replace: `shutil.rmtree(final_dir)` then `tmp_dir.replace(final_dir)` loses both copies on a crash between the two lines | **Deferred to M3** — acceptable for single-process M1; document in F4 before multi-writer work |
+| 2 | Low | security | No `n_rows` cap on parquet ingestion → OOM on malicious input | **Deferred** — source files are repo-internal; add `max_rows` config when ingest opens to untrusted sources |
+| 3 | Low | security | Theoretical TOCTOU between `rmtree` and `replace` if multiple processes ever share `bronze_root` | **Deferred to M3** — paired with #1 |
+| 4 | Later-pain | critic | `wrap_cast_error` is exported but only called from a test — dead in production until wired | **Fixed** — replaced with `collect_bronze(lf)` helper used by the integration flow and all future collect sites |
+| 5 | Later-pain | critic | Retry-after-FAILED collides on PK; `reset_stale` only sweeps `IN_PROGRESS` | **Fixed** — added `ManifestDB.delete_batch(batch_id)` and wired the retry helper to drop a prior non-COMPLETED row before re-insert; covered by `test_ingest_retries_after_failed_row` |
+| 6 | Nitpick | critic | Commit message says 48 rows; fixture is 96 | **Accepted** — future commit messages measure the generated fixture before claiming a count |
+| 7 | Confirmed | critic | Polars Enum cast raises `InvalidOperationError` on unknown value (no silent null) — good | — |
+| 8 | Contract flip | critic vs measurement | Critic assumed parquet round-trip drops Enum metadata; measurement shows Polars 1.x **preserves** Enum | **Pinned** — `test_write_bronze_round_trip_preserves_enum_dtype` locks the positive contract so Silver can rely on Enum dtype without re-casting |
+
+### Pre-F1.6 measurements still owed
+
+- [ ] Measure 153K-row zstd write time on the real parquet.
+- [ ] Document 48-bit `batch_id` collision bound in the DESIGN.md.
+- [ ] Smoke-test `collect_bronze` against the real parquet with a poisoned row.
+- [ ] File-level atomic-rename prototype for multi-process F4 (from finding #1).
 
 ### What the reviewers flagged as well-done
 
-- SecretStr for API key; `.env.example` placeholder; `.env` gitignored.
-- All SQL uses `?` parameter binding; FK enforcement via PRAGMA.
-- Transactional BEGIN/COMMIT/ROLLBACK wrapper.
-- 98.67% coverage without coverage-gaming.
-- `BatchRow` as frozen slots dataclass with `is_completed` / `is_failed` helpers.
+- Lazy-first Polars usage (`scan_parquet` everywhere, single `.collect()` at the sink).
+- Deterministic `batch_id` derivation hashed from content + mtime.
+- Schema assertion at write time (`assert_bronze_schema`).
+- Comprehensive enum-rejection regression test.
+- All SQL parameter-bound; `SecretStr`/redaction processor upstream.
