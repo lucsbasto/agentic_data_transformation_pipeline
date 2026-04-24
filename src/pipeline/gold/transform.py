@@ -38,6 +38,7 @@ from pipeline.errors import PipelineError
 from pipeline.gold._regex import (
     CLOSING_PHRASES,
     EVASIVE_PHRASES,
+    HAGGLING_PHRASES,
     TECHNICAL_QUESTION_PHRASES,
     count_phrase_hits,
 )
@@ -60,7 +61,7 @@ from pipeline.gold.writer import (
     write_gold_lead_profile,
 )
 from pipeline.logging import get_logger
-from pipeline.schemas.gold import PERSONA_VALUES
+from pipeline.schemas.gold import PERSONA_VALUES, PRICE_SENSITIVITY_VALUES
 from pipeline.settings import Settings
 
 __all__ = [
@@ -88,6 +89,9 @@ _LOG = get_logger(__name__)
 # running loop we would need a different bridge. The CLI is sync so
 # the simple ``asyncio.run`` is enough for F3.14.
 _DEFAULT_BATCH_ANCHOR: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
+
+_PRICE_SENSITIVITY_MEDIUM_THRESHOLD: Final[int] = 1
+_PRICE_SENSITIVITY_HIGH_THRESHOLD: Final[int] = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,9 +287,20 @@ def _apply_persona_and_intent_score(
     joined = skeleton_lf.join(persona_df.lazy(), on="lead_id", how="left").join(
         intent_inputs_lf, on="lead_id", how="left"
     )
+    price_dtype = pl.Enum(list(PRICE_SENSITIVITY_VALUES))
+    hits = pl.col("haggling_phrase_hits").fill_null(0)
+    price_sensitivity_expr = (
+        pl.when(hits >= _PRICE_SENSITIVITY_HIGH_THRESHOLD)
+        .then(pl.lit("high"))
+        .when(hits >= _PRICE_SENSITIVITY_MEDIUM_THRESHOLD)
+        .then(pl.lit("medium"))
+        .otherwise(pl.lit("low"))
+        .cast(price_dtype)
+    )
     filled = joined.with_columns(
         pl.col("persona_filled").alias("persona"),
         pl.col("persona_confidence_filled").alias("persona_confidence"),
+        price_sensitivity_expr.alias("price_sensitivity"),
     ).drop(["persona_filled", "persona_confidence_filled"])
 
     scored = compute_intent_score(filled)
@@ -368,6 +383,12 @@ def _compute_intent_score_inputs(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
             return_dtype=pl.Int32,
         )
         .alias("evasive_phrase_hits"),
+        pl.col("_inbound_text")
+        .map_elements(
+            lambda body: count_phrase_hits(body, HAGGLING_PHRASES),
+            return_dtype=pl.Int32,
+        )
+        .alias("haggling_phrase_hits"),
     ).drop("_inbound_text")
 
     return (
@@ -377,6 +398,7 @@ def _compute_intent_score_inputs(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
             pl.col("closing_phrase_hits").fill_null(0).cast(pl.Int32),
             pl.col("technical_question_hits").fill_null(0).cast(pl.Int32),
             pl.col("evasive_phrase_hits").fill_null(0).cast(pl.Int32),
+            pl.col("haggling_phrase_hits").fill_null(0).cast(pl.Int32),
         )
     )
 

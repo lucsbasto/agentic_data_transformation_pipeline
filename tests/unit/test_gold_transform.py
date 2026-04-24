@@ -374,6 +374,42 @@ def test_lead_profile_intent_score_is_computed(tmp_path: Path) -> None:
         assert 0 <= score <= 100
 
 
+def test_price_sensitivity_buckets_by_haggling_hits(tmp_path: Path) -> None:
+    """F3-RF-16 price_sensitivity: 0 hits=low, 1-2=medium, 3+=high."""
+    classifier, _ = _persona_classifier_factory()
+    rows = [
+        _silver_row(
+            message_id="low-1",
+            lead_id="L_low",
+            timestamp=_ts(1000),
+            message_body_masked="bom dia",
+        ),
+        _silver_row(
+            message_id="med-1",
+            lead_id="L_med",
+            timestamp=_ts(1100),
+            message_body_masked="tem desconto?",
+        ),
+        _silver_row(
+            message_id="high-1",
+            lead_id="L_high",
+            timestamp=_ts(1200),
+            message_body_masked="quero desconto, abaixar o preço, vou em outro lugar",
+        ),
+    ]
+    result = transform_gold(
+        _silver_lf(rows),
+        batch_id="bid-price",
+        gold_root=tmp_path,
+        persona_classifier=classifier,
+    )
+    lp = pl.read_parquet(result.lead_profile_path).sort("lead_id")
+    mapping = dict(zip(lp["lead_id"].to_list(), lp["price_sensitivity"].to_list(), strict=True))
+    assert mapping["L_low"] == "low"
+    assert mapping["L_med"] == "medium"
+    assert mapping["L_high"] == "high"
+
+
 def test_agent_performance_top_persona_uses_classifier_output(tmp_path: Path) -> None:
     """``top_persona_converted`` is wired from persona labels — the
     F3.6 builder accepts the lead_personas frame, the orchestrator
