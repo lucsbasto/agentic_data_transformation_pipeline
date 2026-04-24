@@ -108,6 +108,20 @@ class Settings(BaseSettings):
             "remaining rows with null entity columns."
         ),
     )
+    # LEARN: bounded [1, 64] so a mistyped env var cannot silently
+    # disable parallelism (=1 blows the M2 15-min SLA — see F3 D11)
+    # nor exceed what DashScope's qwen3-coder-plus tolerates.
+    pipeline_llm_concurrency: int = Field(
+        default=16,
+        ge=1,
+        le=64,
+        description=(
+            "Max in-flight LLM calls per batch. Defaults match "
+            "DashScope qwen3-coder-plus per-model quota and CPython's "
+            "default thread-pool ceiling. Sequential persona "
+            "classification on 5000 leads would blow the M2 SLA."
+        ),
+    )
 
     # LEARN: ``model_config`` is Pydantic v2's way to configure the model
     # itself (v1 used an inner ``class Config``). The dict-like
