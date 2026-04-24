@@ -438,12 +438,12 @@ def _row_to_aggregate(row: dict[str, object]) -> LeadAggregate:
     """Convert a collected row into a :class:`LeadAggregate`."""
     return LeadAggregate(
         lead_id=str(row["lead_id"]),
-        num_msgs=int(row["num_msgs"]),  # type: ignore[arg-type]
-        num_msgs_inbound=int(row["num_msgs_inbound"]),  # type: ignore[arg-type]
-        num_msgs_outbound=int(row["num_msgs_outbound"]),  # type: ignore[arg-type]
+        num_msgs=int(row["num_msgs"]),  # type: ignore[call-overload]
+        num_msgs_inbound=int(row["num_msgs_inbound"]),  # type: ignore[call-overload]
+        num_msgs_outbound=int(row["num_msgs_outbound"]),  # type: ignore[call-overload]
         outcome=row["outcome"],  # type: ignore[arg-type]
         mencionou_concorrente=bool(row["mencionou_concorrente"]),
-        competitor_count_distinct=int(row["competitor_count_distinct"]),  # type: ignore[arg-type]
+        competitor_count_distinct=int(row["competitor_count_distinct"]),  # type: ignore[call-overload]
         forneceu_dado_pessoal=bool(row["forneceu_dado_pessoal"]),
         last_message_at=row["last_message_at"],  # type: ignore[arg-type]
         conversation_text=str(row["conversation_text"] or ""),
