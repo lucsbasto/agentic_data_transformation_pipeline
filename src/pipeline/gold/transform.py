@@ -396,7 +396,12 @@ def _persona_distribution(lead_profile_df: pl.DataFrame) -> dict[str, int]:
     if lead_profile_df.height == 0:
         return {}
     counts = lead_profile_df.lazy().group_by("persona").agg(pl.len().alias("count")).collect()
-    return {row["persona"]: int(row["count"]) for row in counts.iter_rows(named=True)}
+    # Null persona keys would crash structlog's sort_keys JSON encoder
+    # (str < None comparison). Bucket unclassified leads under a sentinel.
+    return {
+        (row["persona"] if row["persona"] is not None else "_unclassified"): int(row["count"])
+        for row in counts.iter_rows(named=True)
+    }
 
 
 def _default_persona_classifier(settings: Settings | None) -> PersonaClassifier:

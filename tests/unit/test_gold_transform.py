@@ -19,7 +19,7 @@ import polars as pl
 import pytest
 
 from pipeline.gold.persona import LeadAggregate, PersonaResult
-from pipeline.gold.transform import GoldTransformResult, transform_gold
+from pipeline.gold.transform import GoldTransformResult, _persona_distribution, transform_gold
 from pipeline.schemas.gold import (
     GOLD_AGENT_PERFORMANCE_SCHEMA,
     GOLD_COMPETITOR_INTEL_SCHEMA,
@@ -538,3 +538,17 @@ def test_rerun_overwrites_existing_partition(tmp_path: Path) -> None:
     )
     lp = pl.read_parquet(second.lead_profile_path)
     assert set(lp["persona"].to_list()) == {"comprador_racional"}
+
+
+def test_persona_distribution_buckets_null_under_sentinel() -> None:
+    # Regression: structlog's sort_keys JSON encoder crashes with
+    # "'<' not supported between instances of 'str' and 'NoneType'"
+    # when an unclassified-lead null leaks into the breakdown dict.
+    df = pl.DataFrame(
+        {"persona": ["comprador_rapido", None, None, "indeciso"]},
+        schema={"persona": pl.Utf8},
+    )
+    dist = _persona_distribution(df)
+    assert dist == {"comprador_rapido": 1, "indeciso": 1, "_unclassified": 2}
+    assert all(isinstance(k, str) for k in dist)
+    json.dumps(dist, sort_keys=True)
