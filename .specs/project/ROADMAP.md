@@ -2,8 +2,8 @@
 
 ## Estado atual
 
-- Fase: **M2 concluído — pronto para M3**
-- Próxima decisão do usuário: autorizar início de F4 (agent core); revisar caveats de SLA cold-run e findings F3 no backlog.
+- Fase: **M3 em curso — F4 spec'd**
+- Próximo passo: implementar tasks F4.1–F4.23 conforme `.specs/features/F4/tasks.md` (começar por F4.1 `feat(F4): declare agent enums + dataclasses`).
 
 ## Milestones
 
@@ -44,7 +44,7 @@ Orquestrador e CLI. Pipeline vira pipeline vivo.
 
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
-| **F4 — Agent core (loop + auto-correção)** | ⚪ blocked | F1 | Complex |
+| **F4 — Agent core (loop + auto-correção)** | 🟡 spec'd (2026-04-24) | F1 | Complex |
 | **F5 — Observability + CLI** | ⚪ blocked | F4 | Medium |
 
 **Critério de fim do M3:** `python -m pipeline watch` mantém pipeline vivo. Injeção de falha sintética dispara ciclo diagnose→fix→retry→escalate documentado em log estruturado.

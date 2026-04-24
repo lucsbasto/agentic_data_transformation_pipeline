@@ -24,6 +24,10 @@ Memória persistente entre sessões. Curta e mutável. Não é log; é contexto 
 - **D-017 (2026-04-23, F2):** Re-run sobre Silver COMPLETED = **skip silencioso** com log + CLI echo. Flag `--force` deferida p/ F5. Motivo: consistente com idempotência de F1 batch.
 - **D-018 (2026-04-23, F2):** CLI `transform-silver --batch-id <bid>` com `--batch-id` obrigatório em F2. Flag `--latest` (default = último Bronze COMPLETED) deferida p/ F5 junto com `watch`. Motivo: sem magia escondida enquanto agent loop não existe.
 - **D-019 (2026-04-23, F2):** Áudio/sticker: `has_content=false` por heurística simples (body vazio OU message_type ∈ {image,audio,video,sticker,document} AND body < 8 chars). Nível de confiança de transcrição deferido p/ F3. Motivo: mantém F2 determinístico; confidence model vive perto da extração LLM.
+- **D-021 (2026-04-24, F4):** Retry budget = **3 tentativas por `(batch_id, layer, error_class)`** (não global por run). Diagnose budget = **10 chamadas LLM por `run_once`** (env `AGENT_DIAGNOSE_BUDGET`). Lockfile `state/agent.lock` com PID + cleanup em SIGINT/SIGTERM entra em F4 (não em F5). Loop interval default 60s (env `AGENT_LOOP_INTERVAL`). Motivo: ADR-006 + decisão usuário 2026-04-24 (`.specs/features/F4/spec.md` §7).
+- **D-022 (2026-04-24, F4):** Diagnoser two-stage: pattern match em `type(exc)` primeiro (`polars.SchemaError`, `RegexMissError`, `FileNotFoundError`, `OutOfRangeError`); LLM fallback só quando determinístico falha. Motivo: 90%+ dos casos transientes têm exceção tipada; reduz custo + latência. ADR-007 em `.specs/features/F4/design.md`.
+- **D-023 (2026-04-24, F4):** Lockfile = filesystem (`state/agent.lock` com PID + mtime), **não** SQLite advisory lock. Motivo: sobrevive a SIGKILL + debug fácil. ADR-008 em `.specs/features/F4/design.md`.
+- **D-024 (2026-04-24, F4):** Regex regenerado por `regex_break` fix vai para `state/regex_overrides.json` indexado por `batch_id`, **não** sobrescreve regex hardcoded em F2. F2 ganha hook `pipeline.silver.regex.load_override(batch_id)`. Motivo: rastreabilidade + reversibilidade. ADR-009 em `.specs/features/F4/design.md`.
 
 ## Blockers ativos
 
@@ -120,3 +124,28 @@ The three seams most likely to tear when Silver lands:
 ~100-line `SilverOrchestrator`: read one Bronze partition, send 5 conversations through `LLMClient.cached_call` against real `qwen3-max`, write one Silver parquet. Forces concrete answers on Enum round-trip, prompt template shape, SQLite WAL contention between `ManifestDB` and `LLMCache`, `runs`-table writers, and the real `qwen3-max` latency number — before any full Silver code lands.
 
 - Next: start F2 Design when ready. Natural pause point here.
+
+## M3 — F4 spec'd (2026-04-24)
+
+F4 trio assinada pelo usuário:
+
+- `.specs/features/F4/spec.md` — 12 RFs, 5 NFRs, 5 decisões assinadas (D-021..D-024).
+- `.specs/features/F4/design.md` — module layout, 4 fixes (`schema_drift`, `regex_break`, `partition_missing`, `out_of_range`), retry/budget mechanics, lockfile, ADR-007/008/009.
+- `.specs/features/F4/tasks.md` — 23 tasks atômicas (F4.0 → F4.23) com dependency graph e DoD.
+
+### Próximo passo concreto
+
+**Implementar F4.1** — `feat(F4): declare agent enums + dataclasses`:
+
+- Criar `src/pipeline/agent/__init__.py` (placeholder) e `src/pipeline/agent/types.py` com:
+  - `ErrorKind(StrEnum)` = `{schema_drift, regex_break, partition_missing, out_of_range, unknown}`.
+  - `Layer(StrEnum)` = `{bronze, silver, gold}`.
+  - `Fix` (frozen dataclass: `kind`, `description`, `apply: Callable`, `requires_llm: bool`).
+  - `FailureRecord` (frozen dataclass).
+  - `AgentResult` (frozen dataclass).
+- Criar `tests/unit/test_agent_types.py` que valida enum values + frozen=True.
+- Commit: `feat(F4): declare agent enums + dataclasses`.
+
+Sequência subsequente: F4.2 (manifest migrations agent_runs + agent_failures) → F4.3 (lockfile) → F4.4 (diagnoser) → fixes em paralelo.
+
+Pause point pedagógica próxima: após F4.4 (diagnoser pronto) — usuário revisa cobertura de pattern match + LLM fallback antes dos fixes encostarem nas layers existentes.
