@@ -2,8 +2,8 @@
 
 ## Estado atual
 
-- Fase: **Phase 0 — Init**
-- Próxima decisão do usuário: validar ordem de features abaixo, autorizar início de F1.
+- Fase: **M2 concluído — pronto para M3**
+- Próxima decisão do usuário: autorizar início de F4 (agent core); revisar caveats de SLA cold-run e findings F3 no backlog.
 
 ## Milestones
 
@@ -27,12 +27,14 @@ Camadas Silver e Gold completas. Aqui mora a maior parte da lógica de IA.
 
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
-| **F2 — Silver transforms** | 🟡 spec'd (2026-04-23) | F1 | Large |
-| **F3 — Gold analytics + personas** | 🟡 spec'd (2026-04-23) | F2 | Large |
+| **F2 — Silver transforms** | ✅ shipped (2026-04-24) | F1 | Large |
+| **F3 — Gold analytics + personas** | ✅ shipped (2026-04-24) | F2 | Large |
 
 **Escopo F2 congelado:** dedup + normalize + PII mask positional + lead_id HMAC-SHA256 + manifest `silver_runs` + CLI `transform-silver --batch-id`. **Fora:** extração LLM (veículo/concorrente/sinistro) deslocada para F3. Spec/design/tasks em `.specs/features/F2/`.
 
 **Critério de fim do M2:** Bronze → Silver → Gold roda end-to-end em <15min full load. Gold tem 4 tabelas + 4 insights não-óbvios. Personas classificadas com guard-rails duros.
+
+**Status da entrega M2:** 616 testes verdes, 95.40% cobertura, ruff + mypy strict limpos. Smoke warm-cache: ~2min end-to-end (dentro do SLA). Smoke cold-cache: ~35min (Silver LLM extract = 5000 calls, 0 hits → **SLA breach em cold run**; incremental / cached runs atendem). Gold entrega 4 tabelas (`conversation_scores=15000`, `lead_profile=14938`, `competitor_intel`, `agent_performance=20`) + `insights/summary.json` com 4 chaves (`ghosting_taxonomy`, `objections`, `disengagement_moment`, `persona_outcome_correlation`). Personas com guard-rails (R1/R2/R3) antes do LLM. Lane de review 3-agent (code-reviewer + security-reviewer + critic) em `.specs/features/F3/REVIEWS/INDEX.md`: 0 critical não-resolvidos, 1 high (budget-waste em rule-hit), 7 medium, risco de segurança LOW. Follow-up obrigatório antes de F4 consumir sinais: C1 (`_coerencia_expr` emite 1.5 fora de [0,1]) e M1 (`price_sensitivity` coluna morta).
 
 ---
 
