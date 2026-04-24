@@ -36,12 +36,22 @@ from typing import Final
 
 import polars as pl
 
+from pipeline.errors import LLMCallError
+from pipeline.llm.client import LLMClient
+from pipeline.logging import get_logger
+from pipeline.schemas.gold import PERSONA_VALUES
+
 __all__ = [
     "PERSONA_EXPECTED_OUTCOME",
+    "PROMPT_VERSION_PERSONA",
+    "SYSTEM_PROMPT",
     "LeadAggregate",
     "PersonaResult",
     "aggregate_leads",
+    "classify_with_overrides",
     "evaluate_rules",
+    "format_user_prompt",
+    "parse_persona_reply",
 ]
 
 
@@ -55,6 +65,17 @@ _R2_MAX_MSGS: Final[int] = 10
 _R1_MAX_MSGS: Final[int] = 4
 _R1_STALENESS_HOURS: Final[int] = 48
 _CONFIDENCE_RULE: Final[float] = 1.0
+_CONFIDENCE_LLM: Final[float] = 0.8
+
+# PRD §18.2 prompt version. Embedded in :data:`SYSTEM_PROMPT` so any
+# edit to the surrounding text changes the SHA-256 cache key
+# automatically — operators never need to run ``LLMCache.invalidate``
+# by hand. The version string doubles as a human-readable marker;
+# bump it every time ``SYSTEM_PROMPT`` changes so a grep across logs
+# still separates pre- from post-edit runs.
+PROMPT_VERSION_PERSONA: Final[str] = "v1"
+
+_PERSONA_VALUES_SET: Final[frozenset[str]] = frozenset(PERSONA_VALUES)
 
 # Text-budget caps on ``conversation_text`` handed to the LLM prompt
 # (design §5.2). Kept here so the LLM slice in F3.9 imports the same
@@ -279,6 +300,137 @@ def _build_conversation_text(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
             .str.slice(0, _MAX_PROMPT_CHARS)
             .alias("conversation_text")
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# LLM classifier (PRD §18.2).
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT: Final[str] = (
+    "Você classifica leads de seguro auto em UMA persona dominante.\n\n"
+    f"PROMPT_VERSION_PERSONA={PROMPT_VERSION_PERSONA}\n\n"
+    "Personas válidas (escolha exatamente uma):\n"
+    "- pesquisador_de_preco\n"
+    "- comprador_racional\n"
+    "- negociador_agressivo\n"
+    "- indeciso\n"
+    "- comprador_rapido\n"
+    "- refem_de_concorrente\n"
+    "- bouncer\n"
+    "- cacador_de_informacao\n\n"
+    "Regras duras (NÃO podem ser violadas):\n"
+    '- Se conversa tem <=4 msgs E sem outcome -> "bouncer".\n'
+    '- Se outcome="venda_fechada" E msgs <=10 -> "comprador_rapido".\n'
+    '- Se lead nunca forneceu dado pessoal -> "cacador_de_informacao".\n\n'
+    "Responda APENAS com a chave da persona, sem explicação.\n"
+)
+
+
+def format_user_prompt(agg: LeadAggregate) -> str:
+    """Build the §18.2 user prompt from a :class:`LeadAggregate`."""
+    outcome = agg.outcome or "desconhecido"
+    return (
+        "Conversa (mensagens em ordem cronológica):\n"
+        f"{agg.conversation_text}\n\n"
+        "Métricas pré-computadas:\n"
+        f"- num_msgs: {agg.num_msgs}\n"
+        f"- outcome: {outcome}\n"
+        f"- mencionou_concorrente: {agg.mencionou_concorrente}\n"
+        f"- forneceu_dado_pessoal: {agg.forneceu_dado_pessoal}\n\n"
+        "Persona:"
+    )
+
+
+def parse_persona_reply(text: str) -> str | None:
+    """Return the persona label if the reply matches one of the eight
+    enum values EXACTLY (after strip + casefold); ``None`` otherwise.
+
+    Strict match avoids picking up a label name that appears inside
+    the LLM's preamble — e.g. "not comprador_racional but indeciso"
+    would otherwise return the first mention. An invalid reply is
+    the caller's cue to fall back to ``comprador_racional`` per
+    design §5.4.
+    """
+    if not text:
+        return None
+    cleaned = text.strip().casefold()
+    return cleaned if cleaned in _PERSONA_VALUES_SET else None
+
+
+def classify_with_overrides(
+    agg: LeadAggregate,
+    *,
+    batch_latest_timestamp: datetime,
+    client: LLMClient,
+) -> PersonaResult:
+    """End-to-end per-lead classification with hard-rule precedence.
+
+    1. Run :func:`evaluate_rules`. If any rule fires, return its
+       forced ``PersonaResult`` — the LLM is never invoked.
+    2. Otherwise call :meth:`LLMClient.cached_call` with the
+       §18.2 prompt; parse the reply; invalid ⇒ fallback to
+       ``comprador_racional`` + ``persona.llm_invalid`` log.
+    3. Any :class:`LLMCallError` or unexpected exception returns
+       :meth:`PersonaResult.skipped` so the caller counts the call
+       against the budget but the batch keeps going.
+    """
+    rule_hit = evaluate_rules(
+        agg, batch_latest_timestamp=batch_latest_timestamp
+    )
+    if rule_hit is not None:
+        return rule_hit
+    return _classify_with_llm(agg, client=client)
+
+
+def _classify_with_llm(
+    agg: LeadAggregate, *, client: LLMClient
+) -> PersonaResult:
+    logger = get_logger("pipeline.gold.persona")
+    try:
+        response = client.cached_call(
+            system=SYSTEM_PROMPT,
+            user=format_user_prompt(agg),
+        )
+    except LLMCallError as exc:
+        logger.warning(
+            "persona.llm_failed",
+            lead_id=agg.lead_id,
+            error=str(exc),
+        )
+        return PersonaResult.skipped()
+    except Exception as exc:
+        logger.exception(
+            "persona.llm_unexpected",
+            lead_id=agg.lead_id,
+            error_type=type(exc).__name__,
+        )
+        return PersonaResult.skipped()
+
+    raw_text = response.text or ""
+    parsed = parse_persona_reply(raw_text)
+    if parsed is None:
+        logger.warning(
+            "persona.llm_invalid",
+            lead_id=agg.lead_id,
+            response_len=len(raw_text),
+        )
+        # LEARN: fallback label is ``comprador_racional`` per
+        # design §5.4 — the most neutral persona, and never
+        # overrides a rule (rules always win earlier in the flow).
+        # ``persona_source='llm_fallback'`` keeps the audit trail
+        # honest: a downstream reader can tell "model said
+        # comprador_racional" from "parser fell back because the
+        # reply did not match the enum".
+        return PersonaResult(
+            persona="comprador_racional",
+            persona_confidence=_CONFIDENCE_LLM,
+            persona_source="llm_fallback",
+        )
+    return PersonaResult(
+        persona=parsed,
+        persona_confidence=_CONFIDENCE_LLM,
+        persona_source="llm",
     )
 
 
