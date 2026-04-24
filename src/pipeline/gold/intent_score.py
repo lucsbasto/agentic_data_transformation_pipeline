@@ -94,7 +94,7 @@ def _coerencia_expr() -> pl.Expr:
         pl.when(persona.is_null() | outcome.is_null())
         .then(pl.lit(_NULL_COERENCIA_FALLBACK))
         .when(match_expr)
-        .then(pl.lit(1.0) + pl.lit(_NULL_COERENCIA_FALLBACK))
+        .then(pl.lit(1.0))
         .otherwise(pl.lit(0.0))
     )
 

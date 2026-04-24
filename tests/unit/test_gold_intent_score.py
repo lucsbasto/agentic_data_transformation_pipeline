@@ -10,6 +10,7 @@ import itertools
 
 import polars as pl
 import pytest
+
 from pipeline.gold.intent_score import (  # type: ignore[import-untyped]
     COMPONENT_ORDER,
     INPUT_COLUMNS,
@@ -18,7 +19,6 @@ from pipeline.gold.intent_score import (  # type: ignore[import-untyped]
     intent_score_expr,
     intent_score_from_component_columns,
 )
-
 from pipeline.gold.persona import PERSONA_EXPECTED_OUTCOME  # type: ignore[import-untyped]
 
 # ---------------------------------------------------------------------------
@@ -217,11 +217,15 @@ class TestCoerenciaOutcomeHistoricoPersona:
         score = _score(persona=persona, outcome=None)
         assert score == _BASELINE_SCORE  # coerencia still 0.5 → same 5 pts
 
-    def test_match_gives_full_weight(self) -> None:
+    def test_match_gives_full_component_weight(self) -> None:
+        # persona=match, outcome=match → coerencia=1.0 → full weight (10 pts).
+        # All other components stay at 0 (baseline), so absolute score equals
+        # the coerencia weight. Delta from null-baseline is half the weight
+        # because null also contributes 0.5 * weight.
         persona = "comprador_rapido"  # expects venda_fechada
         matching_outcome = "venda_fechada"
-        delta = _score(persona=persona, outcome=matching_outcome) - _BASELINE_SCORE
-        assert delta == WEIGHTS["coerencia_outcome_historico_persona"]
+        score = _score(persona=persona, outcome=matching_outcome)
+        assert score == WEIGHTS["coerencia_outcome_historico_persona"]
 
     def test_contradiction_gives_zero(self) -> None:
         persona = "comprador_rapido"  # expects venda_fechada
@@ -234,13 +238,13 @@ class TestCoerenciaOutcomeHistoricoPersona:
         "persona,expected_outcomes",
         [(p, list(outcomes)) for p, outcomes in PERSONA_EXPECTED_OUTCOME.items()],
     )
-    def test_each_persona_match_gives_full_weight(
+    def test_each_persona_match_gives_full_component_weight(
         self, persona: str, expected_outcomes: list[str]
     ) -> None:
         for outcome in expected_outcomes:
-            delta = _score(persona=persona, outcome=outcome) - _BASELINE_SCORE
-            assert delta == WEIGHTS["coerencia_outcome_historico_persona"], (
-                f"persona={persona}, outcome={outcome} should match"
+            score = _score(persona=persona, outcome=outcome)
+            assert score == WEIGHTS["coerencia_outcome_historico_persona"], (
+                f"persona={persona}, outcome={outcome} should score full weight"
             )
 
     @pytest.mark.parametrize(
