@@ -34,6 +34,7 @@ from pipeline.gold.persona import (
     LeadAggregate,
     PersonaResult,
     classify_with_overrides,
+    evaluate_rules,
 )
 from pipeline.llm.cache import LLMCache
 from pipeline.llm.client import LLMClient, LLMResponse
@@ -146,11 +147,11 @@ def _classify_one_sync(
 ) -> tuple[str, PersonaResult]:
     """Runs on a worker thread. Reads ``_thread_local.client``.
 
-    Budget semantics: we charge before calling the classifier. A
-    cache hit is refunded after the fact. A rule-hit path never
-    reaches the provider; its charge stays spent because the design
-    (§9.3) calls this "acceptable overhead". Pre-filtering rule hits
-    upstream is the caller's job if the extra capacity matters.
+    Only LLM-needing leads reach this function — rule-hit leads are
+    resolved synchronously by :func:`classify_all` before dispatch so
+    they never consume a budget slot or a thread-pool worker. Budget
+    semantics: we charge before calling the classifier, and refund
+    on cache hit after the fact.
     """
     if not budget.try_charge_provider_call():
         return agg.lead_id, PersonaResult.skipped()
@@ -189,6 +190,18 @@ async def classify_all(
     deterministic (design D12).
     """
     logger = get_logger("pipeline.gold.concurrency")
+
+    # Pre-filter rule-hit leads synchronously so they never consume
+    # a budget slot or a thread-pool worker (design §9.3 follow-up).
+    rule_results: dict[str, PersonaResult] = {}
+    llm_needed: list[LeadAggregate] = []
+    for agg in aggregates:
+        hit = evaluate_rules(agg, batch_latest_timestamp=batch_latest_timestamp)
+        if hit is not None:
+            rule_results[agg.lead_id] = hit
+        else:
+            llm_needed.append(agg)
+
     concurrency = settings.pipeline_llm_concurrency
     sem = asyncio.Semaphore(concurrency)
     loop = asyncio.get_running_loop()
@@ -210,15 +223,17 @@ async def classify_all(
             )
 
     try:
-        results = await asyncio.gather(*[one(a) for a in aggregates])
+        llm_results = await asyncio.gather(*[one(a) for a in llm_needed])
     finally:
         executor.shutdown(wait=True)
 
     logger.info(
         "gold.persona.batch_complete",
         total=len(aggregates),
+        rule_hits=len(rule_results),
+        llm_dispatched=len(llm_needed),
         provider_calls=budget.calls_made,
         cache_hits=budget.cache_hits,
         concurrency=concurrency,
     )
-    return dict(results)
+    return {**rule_results, **dict(llm_results)}

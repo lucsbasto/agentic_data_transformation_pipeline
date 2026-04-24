@@ -285,6 +285,68 @@ def test_budget_exhaustion_short_circuits_provider_work(
     assert budget.cache_hits == 0
 
 
+def test_rule_hit_leads_bypass_budget_and_thread_pool(
+    clean_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Rule-hit leads must not consume a budget slot or dispatch a
+    provider call — evaluate_rules resolves them synchronously
+    before the thread pool runs."""
+    settings = _load_settings(monkeypatch, concurrency=2)
+
+    provider_calls = {"n": 0}
+
+    class _MissClient:
+        def __init__(self, _settings: Settings, _cache: _FakeCache) -> None:
+            pass
+
+        def cached_call(self, **_kwargs: Any) -> LLMResponse:
+            provider_calls["n"] += 1
+            return _response(cache_hit=False)
+
+    _install_fakes(monkeypatch, _MissClient)
+
+    # Mix: three rule-hit aggregates (R3 fires because
+    # forneceu_dado_pessoal=False) and two LLM-needing aggregates.
+    rule_hit = [
+        LeadAggregate(
+            lead_id=f"R{i}",
+            num_msgs=20,
+            num_msgs_inbound=19,
+            num_msgs_outbound=1,
+            outcome="em_negociacao",
+            mencionou_concorrente=False,
+            competitor_count_distinct=0,
+            forneceu_dado_pessoal=False,
+            last_message_at=_BASE_TS,
+            conversation_text="msg",
+        )
+        for i in range(3)
+    ]
+    llm_needed = [_agg(f"L{i}") for i in range(2)]
+
+    budget = mod._BudgetCounter(5)
+
+    results = asyncio.run(
+        mod.classify_all(
+            rule_hit + llm_needed,
+            settings=settings,
+            db_path=tmp_path / "cache.db",
+            budget=budget,
+            batch_latest_timestamp=_BASE_TS,
+        )
+    )
+
+    assert len(results) == 5
+    assert provider_calls["n"] == 2
+    assert budget.calls_made == 2
+    for rid in ("R0", "R1", "R2"):
+        assert results[rid].persona_source == "rule"
+    for lid in ("L0", "L1"):
+        assert results[lid].persona_source == "llm"
+
+
 # ---------------------------------------------------------------------------
 # 4. _BudgetCounter in isolation — direct thread-safety sanity check.
 # ---------------------------------------------------------------------------
