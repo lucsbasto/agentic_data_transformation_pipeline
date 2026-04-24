@@ -8,6 +8,7 @@ from __future__ import annotations
 # (friendlier but heavier). Click is small and battle-tested.
 import click
 
+from pipeline.cli.gold import gold
 from pipeline.cli.ingest import ingest
 from pipeline.cli.silver import silver
 
@@ -25,9 +26,10 @@ def cli() -> None:
 
 
 # LEARN: ``cli.add_command(...)`` registers each subcommand we imported
-# above. ``gold`` will land here once F3 ships.
+# above.
 cli.add_command(ingest)
 cli.add_command(silver)
+cli.add_command(gold)
 
 
 def main() -> None:

@@ -39,6 +39,10 @@ class SilverError(PipelineError):
     """Non-schema failure during the Bronze → Silver transform."""
 
 
+class GoldError(PipelineError):
+    """Non-schema failure during the Silver → Gold transform."""
+
+
 class ManifestError(PipelineError):
     """SQLite manifest access failed or the row shape is unexpected."""
 
