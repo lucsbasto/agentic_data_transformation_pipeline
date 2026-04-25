@@ -41,6 +41,7 @@ KIND_CHOICES: Final[tuple[str, ...]] = (
     ErrorKind.REGEX_BREAK.value,
     ErrorKind.PARTITION_MISSING.value,
     ErrorKind.OUT_OF_RANGE.value,
+    ErrorKind.UNKNOWN.value,
 )
 
 
@@ -91,6 +92,31 @@ def inject_partition_missing(target: Path) -> None:
         target.unlink()
 
 
+_MIN_PARQUET_BYTES: Final[int] = 8
+"""Minimum file size required for a meaningful truncation."""
+
+
+def inject_unknown(parquet_path: Path) -> None:
+    """Corrupt a parquet file by truncating it mid-page so that polars
+    raises a generic read error (``InvalidOperationError`` or similar)
+    that does not match any deterministic pattern in
+    :func:`pipeline.agent.diagnoser.classify`.
+
+    This forces the agent diagnoser to fall through to stage-2 LLM
+    fallback (or return ``ErrorKind.UNKNOWN`` when the budget is zero
+    or no LLM client is provided).
+    """
+    if not parquet_path.exists():
+        raise FileNotFoundError(parquet_path)
+    data = parquet_path.read_bytes()
+    if len(data) < _MIN_PARQUET_BYTES:
+        raise ValueError("parquet file too small to truncate meaningfully")
+    # Keep only the first half of the raw bytes — this splits the file
+    # mid-row-group which polars cannot parse.
+    truncated = data[: len(data) // 2]
+    parquet_path.write_bytes(truncated)
+
+
 def inject_out_of_range(parquet_path: Path) -> None:
     """Append one row whose ``message_body`` carries a negative
     monetary value — out of range for the F2 quarantine guard."""
@@ -112,6 +138,7 @@ _DISPATCH = {
     ErrorKind.REGEX_BREAK.value: inject_regex_break,
     ErrorKind.PARTITION_MISSING.value: inject_partition_missing,
     ErrorKind.OUT_OF_RANGE.value: inject_out_of_range,
+    ErrorKind.UNKNOWN.value: inject_unknown,
 }
 
 
@@ -137,7 +164,7 @@ def inject(kind: str, target: Path) -> None:
     "--kind",
     type=click.Choice(KIND_CHOICES, case_sensitive=False),
     required=True,
-    help="Failure class to inject (one of the four auto-correctable kinds).",
+    help="Failure class to inject (one of the five ErrorKind values).",
 )
 @click.option(
     "--target",

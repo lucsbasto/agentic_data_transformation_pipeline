@@ -16,8 +16,10 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import inject_fault  # noqa: E402 — added to sys.path above
 
+from pipeline.agent.diagnoser import _DiagnoseBudget, classify  # noqa: E402
 from pipeline.agent.fixes.partition_missing import recreate_partition  # noqa: E402
 from pipeline.agent.fixes.schema_drift import detect_delta  # noqa: E402
+from pipeline.agent.types import ErrorKind, Layer  # noqa: E402
 from pipeline.ingest.batch import compute_batch_identity  # noqa: E402
 from pipeline.schemas.bronze import BRONZE_SCHEMA, SOURCE_COLUMNS  # noqa: E402
 
@@ -168,3 +170,52 @@ def test_cli_main_lists_every_canonical_kind() -> None:
     assert result.exit_code == 0
     for kind in inject_fault.KIND_CHOICES:
         assert kind in result.output
+
+
+# ---------------------------------------------------------------------------
+# inject_unknown.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_unknown_truncates_parquet(tmp_path: Path) -> None:
+    src = tmp_path / "raw.parquet"
+    _write_source_parquet(src)
+    original_size = src.stat().st_size
+    inject_fault.inject_unknown(src)
+    assert src.stat().st_size < original_size
+    # polars must fail to read the corrupted file
+    with pytest.raises(BaseException):  # noqa: B017 — any read error is valid
+        pl.read_parquet(src)
+
+
+def test_inject_unknown_raises_on_missing_target(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        inject_fault.inject_unknown(tmp_path / "missing.parquet")
+
+
+def test_inject_unknown_raises_on_tiny_file(tmp_path: Path) -> None:
+    src = tmp_path / "tiny.parquet"
+    src.write_bytes(b"PAR1")  # only 4 bytes — too small to truncate meaningfully
+    with pytest.raises(ValueError, match="too small"):
+        inject_fault.inject_unknown(src)
+
+
+def test_inject_unknown_forces_unknown_via_classifier(tmp_path: Path) -> None:
+    """Corrupted bytes -> polars raises a non-deterministic exception ->
+    classify with budget=0 returns UNKNOWN (no LLM call needed)."""
+    src = tmp_path / "raw.parquet"
+    _write_source_parquet(src)
+    inject_fault.inject_unknown(src)
+
+    try:
+        pl.read_parquet(src)
+    except BaseException as exc:
+        kind = classify(
+            exc,
+            layer=Layer.BRONZE,
+            batch_id="bid_unknown",
+            budget=_DiagnoseBudget(cap=0),
+        )
+        assert kind is ErrorKind.UNKNOWN
+    else:
+        pytest.fail("Expected polars to raise on the corrupted parquet")
