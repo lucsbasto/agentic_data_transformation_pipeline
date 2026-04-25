@@ -24,6 +24,7 @@ from __future__ import annotations
 #   - ``datetime`` + ``UTC`` — build timezone-aware timestamps.
 #   - ``pathlib.Path`` — object-oriented filesystem paths.
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +33,9 @@ from pathlib import Path
 
 from pipeline.errors import ManifestError
 from pipeline.schemas.manifest import (
+    AGENT_ERROR_KINDS,
+    AGENT_RUN_STATUS_IN_PROGRESS,
+    AGENT_RUN_STATUSES,
     ALL_DDL,
     BATCH_STATUS_COMPLETED,
     BATCH_STATUS_FAILED,
@@ -44,6 +48,11 @@ from pipeline.schemas.manifest import (
     RUN_STATUSES,
     RUNS_MIGRATIONS,
 )
+
+# LEARN: ``last_error_msg`` cap mirrors F4 spec §4.2 — anything longer
+# is truncated by the writer (with an ellipsis) so a runaway traceback
+# can never blow up a manifest row.
+_AGENT_ERROR_MSG_MAX: int = 512
 
 STALE_ERROR_TYPE: str = "StaleInProgress"
 """``error_type`` used when crash recovery marks an orphan batch FAILED."""
@@ -568,6 +577,171 @@ class ManifestDB:
                 (batch_id, layer),
             )
             return cur.rowcount
+
+    # ------------------------------------------------------------------ agent loop (F4)
+
+    def start_agent_run(self, *, now_iso: str | None = None) -> str:
+        """Open a new ``agent_runs`` row in ``IN_PROGRESS`` state.
+
+        Returns the freshly-minted ``agent_run_id`` (a UUID-4 string).
+        Counters all start at zero and are updated by
+        :meth:`end_agent_run`. ``now_iso`` is injectable so tests can
+        pin ``started_at`` deterministically.
+        """
+        agent_run_id = uuid.uuid4().hex
+        started_at = now_iso if now_iso is not None else _utcnow_iso()
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO agent_runs (agent_run_id, started_at, status) "
+                "VALUES (?, ?, ?);",
+                (agent_run_id, started_at, AGENT_RUN_STATUS_IN_PROGRESS),
+            )
+        return agent_run_id
+
+    def end_agent_run(
+        self,
+        agent_run_id: str,
+        *,
+        status: str,
+        batches_processed: int = 0,
+        failures_recovered: int = 0,
+        escalations: int = 0,
+        now_iso: str | None = None,
+    ) -> None:
+        """Stamp the terminal ``status`` + final tallies on an
+        ``agent_runs`` row. ``status`` must be one of the terminal
+        values (anything other than ``IN_PROGRESS``)."""
+        if status not in AGENT_RUN_STATUSES:
+            raise ManifestError(
+                f"invalid agent_run status {status!r}; expected one of "
+                f"{AGENT_RUN_STATUSES}"
+            )
+        if status == AGENT_RUN_STATUS_IN_PROGRESS:
+            raise ManifestError(
+                "end_agent_run requires a terminal status, got IN_PROGRESS"
+            )
+        ended_at = now_iso if now_iso is not None else _utcnow_iso()
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE agent_runs SET status = ?, ended_at = ?, "
+                "batches_processed = ?, failures_recovered = ?, escalations = ? "
+                "WHERE agent_run_id = ?;",
+                (
+                    status,
+                    ended_at,
+                    batches_processed,
+                    failures_recovered,
+                    escalations,
+                    agent_run_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise ManifestError(f"no agent_run row to end: {agent_run_id!r}")
+
+    def record_agent_failure(
+        self,
+        *,
+        agent_run_id: str,
+        batch_id: str,
+        layer: str,
+        error_class: str,
+        attempts: int,
+        last_error_msg: str,
+        now_iso: str | None = None,
+    ) -> str:
+        """Append one ``agent_failures`` row for the current attempt
+        and return its ``failure_id``.
+
+        ``last_error_msg`` is truncated to the spec §4.2 cap (512
+        chars) before insert so callers can pass raw exception text.
+        """
+        self._require_layer(layer)
+        if error_class not in AGENT_ERROR_KINDS:
+            raise ManifestError(
+                f"invalid error_class {error_class!r}; expected one of "
+                f"{AGENT_ERROR_KINDS}"
+            )
+        if attempts < 1:
+            raise ManifestError(
+                f"attempts must be >= 1, got {attempts}"
+            )
+        failure_id = uuid.uuid4().hex
+        ts = now_iso if now_iso is not None else _utcnow_iso()
+        truncated = last_error_msg[:_AGENT_ERROR_MSG_MAX]
+        with self._transaction() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO agent_failures (failure_id, agent_run_id, "
+                    "batch_id, layer, error_class, attempts, last_error_msg, ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+                    (
+                        failure_id,
+                        agent_run_id,
+                        batch_id,
+                        layer,
+                        error_class,
+                        attempts,
+                        truncated,
+                        ts,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ManifestError(
+                    f"integrity error recording agent failure for "
+                    f"agent_run_id={agent_run_id!r}: {exc}"
+                ) from exc
+        return failure_id
+
+    def record_agent_fix(self, failure_id: str, *, fix_kind: str) -> None:
+        """Stamp the ``Fix`` kind that the executor applied after a
+        failure. The row stays ``escalated=0`` — escalation is a
+        separate decision (see :meth:`mark_agent_failure_escalated`).
+        """
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE agent_failures SET last_fix_kind = ? WHERE failure_id = ?;",
+                (fix_kind, failure_id),
+            )
+            if cur.rowcount == 0:
+                raise ManifestError(
+                    f"no agent_failure row to update: {failure_id!r}"
+                )
+
+    def mark_agent_failure_escalated(self, failure_id: str) -> None:
+        """Flip ``escalated=1`` on the failure row. Idempotent — a
+        re-call on an already-escalated row is a no-op rowcount
+        update."""
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE agent_failures SET escalated = 1 WHERE failure_id = ?;",
+                (failure_id,),
+            )
+            if cur.rowcount == 0:
+                raise ManifestError(
+                    f"no agent_failure row to escalate: {failure_id!r}"
+                )
+
+    def count_agent_attempts(
+        self, *, batch_id: str, layer: str, error_class: str
+    ) -> int:
+        """Return how many failure rows exist for the
+        ``(batch_id, layer, error_class)`` triple — across all
+        ``agent_run`` rows. The executor compares this against the
+        retry budget to decide whether to escalate (F4 design §6).
+        """
+        self._require_layer(layer)
+        if error_class not in AGENT_ERROR_KINDS:
+            raise ManifestError(
+                f"invalid error_class {error_class!r}; expected one of "
+                f"{AGENT_ERROR_KINDS}"
+            )
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM agent_failures "
+            "WHERE batch_id = ? AND layer = ? AND error_class = ?;",
+            (batch_id, layer, error_class),
+        ).fetchone()
+        return int(row[0])
 
     # ------------------------------------------------------------------ internals
 

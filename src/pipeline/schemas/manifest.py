@@ -153,6 +153,98 @@ CREATE TABLE IF NOT EXISTS llm_cache (
 );
 """
 
+# LEARN: F4 — the agent loop persists its own per-iteration row in
+# ``agent_runs`` plus one row per failure attempt in ``agent_failures``.
+# Both tables live in the same SQLite file as ``batches`` / ``runs``
+# (ADR-003). Status / error_class strings mirror the ``ErrorKind`` and
+# ``RunStatus`` StrEnums in ``pipeline.agent.types`` — the CHECK
+# constraint enforces them at write time.
+AGENT_RUN_STATUS_IN_PROGRESS: Final[str] = "IN_PROGRESS"
+AGENT_RUN_STATUS_COMPLETED: Final[str] = "COMPLETED"
+AGENT_RUN_STATUS_INTERRUPTED: Final[str] = "INTERRUPTED"
+AGENT_RUN_STATUS_FAILED: Final[str] = "FAILED"
+
+AGENT_RUN_STATUSES: Final[tuple[str, ...]] = (
+    AGENT_RUN_STATUS_IN_PROGRESS,
+    AGENT_RUN_STATUS_COMPLETED,
+    AGENT_RUN_STATUS_INTERRUPTED,
+    AGENT_RUN_STATUS_FAILED,
+)
+
+AGENT_ERROR_KIND_SCHEMA_DRIFT: Final[str] = "schema_drift"
+AGENT_ERROR_KIND_REGEX_BREAK: Final[str] = "regex_break"
+AGENT_ERROR_KIND_PARTITION_MISSING: Final[str] = "partition_missing"
+AGENT_ERROR_KIND_OUT_OF_RANGE: Final[str] = "out_of_range"
+AGENT_ERROR_KIND_UNKNOWN: Final[str] = "unknown"
+
+AGENT_ERROR_KINDS: Final[tuple[str, ...]] = (
+    AGENT_ERROR_KIND_SCHEMA_DRIFT,
+    AGENT_ERROR_KIND_REGEX_BREAK,
+    AGENT_ERROR_KIND_PARTITION_MISSING,
+    AGENT_ERROR_KIND_OUT_OF_RANGE,
+    AGENT_ERROR_KIND_UNKNOWN,
+)
+
+AGENT_RUNS_DDL: Final[str] = """
+CREATE TABLE IF NOT EXISTS agent_runs (
+    agent_run_id        TEXT PRIMARY KEY,
+    started_at          TEXT NOT NULL,
+    -- NULL while ``IN_PROGRESS``; set on terminal status update.
+    ended_at            TEXT,
+    status              TEXT NOT NULL CHECK (
+        status IN ('IN_PROGRESS', 'COMPLETED', 'INTERRUPTED', 'FAILED')
+    ),
+    -- Counters refreshed at ``end_agent_run`` time so the row reflects
+    -- the loop's final tally without an extra aggregate query.
+    batches_processed   INTEGER NOT NULL DEFAULT 0,
+    failures_recovered  INTEGER NOT NULL DEFAULT 0,
+    escalations         INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+AGENT_RUNS_INDEXES: Final[tuple[str, ...]] = (
+    "CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);",
+)
+
+AGENT_FAILURES_DDL: Final[str] = """
+CREATE TABLE IF NOT EXISTS agent_failures (
+    failure_id          TEXT PRIMARY KEY,
+    -- ON DELETE CASCADE so dropping an agent_run wipes its failure
+    -- trail too — keeps the DB tidy in tests / dev resets.
+    agent_run_id        TEXT NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,
+    batch_id            TEXT NOT NULL,
+    layer               TEXT NOT NULL CHECK (layer IN ('bronze', 'silver', 'gold')),
+    error_class         TEXT NOT NULL CHECK (
+        error_class IN (
+            'schema_drift',
+            'regex_break',
+            'partition_missing',
+            'out_of_range',
+            'unknown'
+        )
+    ),
+    -- ``attempts`` = ordinal of THIS attempt within the
+    -- (batch_id, layer, error_class) triple. Executor increments it
+    -- before the row is written.
+    attempts            INTEGER NOT NULL,
+    last_fix_kind       TEXT,
+    -- 0/1 instead of TEXT to keep the JOIN on ``escalations`` cheap.
+    escalated           INTEGER NOT NULL DEFAULT 0 CHECK (escalated IN (0, 1)),
+    -- Sanitized + truncated by the writer (≤512 chars per spec §4.2).
+    last_error_msg      TEXT,
+    ts                  TEXT NOT NULL
+);
+"""
+
+AGENT_FAILURES_INDEXES: Final[tuple[str, ...]] = (
+    "CREATE INDEX IF NOT EXISTS idx_agent_failures_run ON agent_failures(agent_run_id);",
+    # LEARN: composite index supports the executor's hot lookup
+    # ``count_attempts(batch_id, layer, error_class)`` — without it
+    # SQLite would full-scan agent_failures on every retry decision.
+    "CREATE INDEX IF NOT EXISTS idx_agent_failures_kind "
+    "ON agent_failures(batch_id, layer, error_class);",
+)
+
 # LEARN: ``*BATCHES_INDEXES`` inside a tuple literal UNPACKS the inner
 # tuple into this position. Equivalent to writing each index statement
 # again by hand, but stays in sync automatically when we add a new
@@ -163,6 +255,10 @@ ALL_DDL: Final[tuple[str, ...]] = (
     RUNS_DDL,
     *RUNS_INDEXES,
     LLM_CACHE_DDL,
+    AGENT_RUNS_DDL,
+    *AGENT_RUNS_INDEXES,
+    AGENT_FAILURES_DDL,
+    *AGENT_FAILURES_INDEXES,
 )
 
 BATCH_STATUS_IN_PROGRESS: Final[str] = "IN_PROGRESS"
