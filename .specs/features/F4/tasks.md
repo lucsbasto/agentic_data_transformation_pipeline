@@ -39,7 +39,7 @@
 ## E2E + demo
 
 - ✅ **F4.17** — `feat(F4): inject_fault demo script`. `scripts/inject_fault.py` com 4 kinds (`schema_drift` adds injected_col, `regex_break` replaces first message_body com formato novo `❌ R$ 1.500,00`, `partition_missing` deletes dir/file, `out_of_range` appends negative-value row). Click CLI `--kind --target` + dispatch table + helper functions importable. 12 integration tests cobrindo cada kind happy path + edge cases (missing target raises, empty parquet raises, unknown kind raises) + CLI dispatch + help. Tests usam `tmp_path` em vez de `tests/fixtures/agent/<kind>/` por preferência de isolamento por teste.
-- ⚪ **F4.18** — `test(F4): budget exhaustion integration test` (`tests/integration/test_agent_budget_exhausted.py` força 4 falhas → 1 escalação, isola `batch_id_B` continuando).
+- ✅ **F4.18** — `test(F4): budget exhaustion integration test`. `tests/integration/test_agent_budget_exhausted.py` exercita F4-RF-04..F4-RF-08 do nível do loop: runner+fix sempre falham → exatamente `retry_budget` rows em `agent_failures` + 1 escalação; respeita custom budget=5; per-batch isolation (A escala em Silver com 3 rows, B continua e completa todas 3 layers em ordem). 3 testes.
 - ⚪ **F4.19** — `test(F4): property test for monotonic count_attempts` (Hypothesis em `tests/property/test_agent_state_props.py`).
 - ⚪ **F4.20** — `chore(F4): smoke run on 153k fixture via agent` (`python -m pipeline agent run-once` end-to-end; valida SLA ≤15min warm-cache; anota tempo em `.specs/features/F4/SMOKE.md`).
 
