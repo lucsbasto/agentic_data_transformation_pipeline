@@ -39,6 +39,17 @@ class SilverError(PipelineError):
     """Non-schema failure during the Bronze → Silver transform."""
 
 
+# LEARN: F4 — narrow Silver failure types the agent diagnoser
+# pattern-matches on (design §7). The fix modules (F4.6 / F4.8) own
+# the code that raises these.
+class SilverRegexMissError(SilverError):
+    """A Silver-layer regex no longer matches a known message format."""
+
+
+class SilverOutOfRangeError(SilverError):
+    """A Silver-layer numeric value fell outside its declared range."""
+
+
 class GoldError(PipelineError):
     """Non-schema failure during the Silver → Gold transform."""
 
