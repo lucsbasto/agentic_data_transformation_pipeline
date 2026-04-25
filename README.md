@@ -159,8 +159,29 @@ state/                   # manifest.db (gitignored)
   settings.json          # Claude Code permission allowlist
 ```
 
-## Project docs
+## Documentation
 
+**Usage guides** (`docs/usage/`):
+- [`quickstart.md`](docs/usage/quickstart.md) — end-to-end run in <10 min.
+- [`cli.md`](docs/usage/cli.md) — full CLI reference (every flag + env var).
+- [`configuration.md`](docs/usage/configuration.md) — env vars, paths, defaults.
+- [`fault-demo.md`](docs/usage/fault-demo.md) — agent self-healing walkthrough.
+- [`troubleshooting.md`](docs/usage/troubleshooting.md) — common failures + fixes.
+
+**API reference** (`docs/api/`):
+- [`README.md`](docs/api/README.md) — module index.
+- [`agent.md`](docs/api/agent.md) — `pipeline.agent` (run_once, types, components).
+- [`silver.md`](docs/api/silver.md) — `pipeline.silver` (transform + schemas).
+- [`gold.md`](docs/api/gold.md) — `pipeline.gold` (persona classification).
+- [`manifest.md`](docs/api/manifest.md) — `pipeline.state.manifest.ManifestDB`.
+- [`errors.md`](docs/api/errors.md) — exception hierarchy + raise sites.
+- [`llm.md`](docs/api/llm.md) — DashScope-backed LLM client + cache.
+
+**Layer flows** (deep-dives):
+- [`docs/silver-flow.md`](docs/silver-flow.md), [`docs/gold-flow.md`](docs/gold-flow.md),
+  [`docs/agent-flow.md`](docs/agent-flow.md), [`docs/f2-llm-handoff.md`](docs/f2-llm-handoff.md).
+
+**Project docs**:
 - `PRD.md` — product requirements.
 - `Teste Técnico de Data & AI Engineering.md` — original test statement.
 - `Dicionário de Dados - Teste Técnico ...md` — source-column dictionary.
