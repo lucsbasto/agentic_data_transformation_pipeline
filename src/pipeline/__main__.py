@@ -8,6 +8,7 @@ from __future__ import annotations
 # (friendlier but heavier). Click is small and battle-tested.
 import click
 
+from pipeline.cli.agent import agent
 from pipeline.cli.gold import gold
 from pipeline.cli.ingest import ingest
 from pipeline.cli.silver import silver
@@ -30,6 +31,7 @@ def cli() -> None:
 cli.add_command(ingest)
 cli.add_command(silver)
 cli.add_command(gold)
+cli.add_command(agent)
 
 
 def main() -> None:
