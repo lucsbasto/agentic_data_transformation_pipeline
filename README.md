@@ -3,9 +3,9 @@
 Self-healing Bronze → Silver → Gold data pipeline with an LLM-driven
 agent loop. Built for the **Data & AI Engineering technical test**
 (see `Teste Técnico de Data & AI Engineering.md`). Implementation is
-currently at **milestone M1 (F1)** — foundation only: raw ingest to
-Bronze plus a cached LLM client. Silver, Gold, and the full agent
-loop land in M2–M3.
+at **milestone M3 (partial)** — F1–F4 shipped (Bronze ingest, Silver
+enrichment, Gold persona classification, self-healing agent loop).
+F5 (runner integration) and runner wiring remain as follow-ups.
 
 ## Stack
 
@@ -46,6 +46,17 @@ $EDITOR .env
 uv run python -m pipeline ingest
 ```
 
+### Environment configuration
+
+The `.env.example` template documents every required environment variable. Copy it to `.env` and fill in values:
+
+```sh
+cp .env.example .env
+$EDITOR .env
+```
+
+Only `ANTHROPIC_API_KEY` (DashScope API key) is required; all other variables have sensible defaults. For full settings reference including validation rules, see `.specs/features/F7/tasks.md` (F7.1).
+
 Expected output:
 ```
 ingested 153228 rows into data/bronze/batch_id=<12hex>/part-0.parquet (batch=<id>, <ms> ms)
@@ -55,6 +66,25 @@ The first run creates `state/manifest.db` and writes the Bronze
 partition. A second run short-circuits with
 `batch <id> already ingested; nothing to do.` — ingest is idempotent
 by content hash + mtime.
+
+Once Bronze is populated, run Silver enrichment:
+```sh
+uv run python -m pipeline silver
+```
+
+Then Gold persona classification:
+```sh
+uv run python -m pipeline gold
+```
+
+Finally, start the self-healing agent loop (observe → diagnose → fix →
+verify):
+```sh
+uv run python -m pipeline agent run-once
+```
+
+The agent loop scans for pending batches and drives them through all
+three layers, injecting fault recovery and LLM-driven repairs.
 
 ## Commands
 
@@ -152,12 +182,11 @@ state/                   # manifest.db (gitignored)
 
 ## Status / next steps
 
-- **M1 / F1 (foundation)**: ✅ shipped — Bronze ingest + LLMClient
-  base.
-- **M2 / F2–F3**: Silver + Gold with LLM-driven enrichment and
-  persona classification (next).
-- **M3 / F4–F5**: self-healing agent loop (observe → diagnose → act
-  → verify) plus observability CLI.
+- **M1 / F1 (foundation)**: ✅ shipped — Bronze ingest + LLMClient base.
+- **M2 / F2–F3**: ✅ shipped — Silver enrichment + Gold persona classification.
+- **M3 / F4**: ✅ shipped — self-healing agent loop (observe → diagnose →
+  act → verify).
+- **M3 / F5 (follow-up)**: 🟡 deferred — runner integration (post-M3).
 - **M4**: tests/CI, auto-correction demo, optional Databricks runner.
 
 See `.specs/project/ROADMAP.md` for the full milestone plan.
