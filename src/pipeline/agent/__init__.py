@@ -10,7 +10,7 @@ out. Public surface is re-exported from this module so downstream code
 
 from __future__ import annotations
 
-from pipeline.agent.loop import run_once
+from pipeline.agent.loop import run_forever, run_once
 from pipeline.agent.types import (
     AgentResult,
     ErrorKind,
@@ -27,5 +27,6 @@ __all__ = [
     "Fix",
     "Layer",
     "RunStatus",
+    "run_forever",
     "run_once",
 ]

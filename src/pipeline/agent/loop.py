@@ -19,8 +19,10 @@ the integration tests in this commit.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Final
 
 from pipeline.agent._logging import (
     EVENT_BATCH_STARTED,
@@ -44,6 +46,9 @@ from pipeline.agent.observer import scan
 from pipeline.agent.planner import LayerRunner, plan
 from pipeline.agent.types import AgentResult, Layer, RunStatus
 from pipeline.state.manifest import ManifestDB
+
+DEFAULT_LOOP_INTERVAL_S: Final[float] = 60.0
+"""Default sleep between ``run_forever`` iterations (spec §7 D5)."""
 
 RunnersFor = Callable[[str], Mapping[Layer, LayerRunner]]
 """``runners_for(batch_id) -> {Layer: zero-arg runner}`` — the loop
@@ -151,3 +156,62 @@ def run_once(
         escalations=escalations,
         status=status,
     )
+
+
+def run_forever(
+    *,
+    manifest: ManifestDB,
+    source_root: Path,
+    runners_for: RunnersFor,
+    classify: Classifier,
+    build_fix: FixBuilder,
+    escalate: Escalator,
+    interval: float = DEFAULT_LOOP_INTERVAL_S,
+    max_iters: int | None = None,
+    stop_event: threading.Event | None = None,
+    lock: AgentLock | None = None,
+    retry_budget: int = DEFAULT_RETRY_BUDGET,
+    event_logger: AgentEventLogger | None = None,
+) -> list[AgentResult]:
+    """Run :func:`run_once` repeatedly, sleeping ``interval`` seconds
+    between iterations.
+
+    The sleep is implemented via :meth:`threading.Event.wait` so a
+    SIGINT / SIGTERM handler can call ``stop_event.set()`` to wake
+    the loop instantly instead of waiting out the remaining
+    interval (design §17 O3).
+
+    ``max_iters`` caps the loop count for tests; ``None`` (default)
+    runs until ``stop_event`` is set or KeyboardInterrupt fires.
+    Returns the list of :class:`AgentResult` values for every
+    iteration that completed (not crashed).
+    """
+    cancel = stop_event or threading.Event()
+    results: list[AgentResult] = []
+    iteration = 0
+    while not cancel.is_set():
+        if max_iters is not None and iteration >= max_iters:
+            break
+        result = run_once(
+            manifest=manifest,
+            source_root=source_root,
+            runners_for=runners_for,
+            classify=classify,
+            build_fix=build_fix,
+            escalate=escalate,
+            lock=lock,
+            retry_budget=retry_budget,
+            event_logger=event_logger,
+        )
+        results.append(result)
+        iteration += 1
+        # Don't sleep after the last iteration when ``max_iters`` is
+        # set — keeps tests snappy AND avoids a delay in the natural
+        # ``cancel.set()`` path.
+        if max_iters is not None and iteration >= max_iters:
+            break
+        # ``Event.wait`` returns True if the event was set during the
+        # wait — that is our cancellation signal.
+        if cancel.wait(interval):
+            break
+    return results
