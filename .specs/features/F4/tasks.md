@@ -32,7 +32,7 @@
 
 ## Loop + CLI
 
-- ⚪ **F4.14** — `feat(F4): run_once orchestrator` (`src/pipeline/agent/loop.py` glue: lock → start_run → observer → planner → executor → end_run). Tests: `tests/integration/test_agent_run_once_clean.py` (no-op), `tests/integration/test_agent_run_once_full.py` (Bronze→Gold from scratch).
+- ✅ **F4.14** — `feat(F4): run_once orchestrator`. `src/pipeline/agent/loop.py` com `run_once` cabling lock → start_agent_run → scan → for batch_id: plan → for (layer, fn): executor.run_with_recovery → break-on-escalation (per-batch isolation F4-RF-08) → end_agent_run → release lock. Re-exporta `run_once` em `pipeline.agent.__init__`. 7 integration tests (`test_agent_run_once.py`) cobrindo no-op completion, lock release happy/exception, all-3-layers happy path, canonical event sequence (loop_started → batch_started → layer_started → layer_completed → loop_stopped), agent_run row written com COMPLETED, failure isolation entre batches (A escala, B continua).
 - ⚪ **F4.15** — `feat(F4): run_forever loop with cancelable interval` (uso de `threading.Event().wait` para cancelamento limpo, `max_iters` para teste). Tests: `tests/integration/test_agent_run_forever_max_iters.py` valida 2 iterações + SIGINT clean shutdown.
 - ⚪ **F4.16** — `feat(F4): pipeline agent CLI subcommand` (`src/pipeline/cli/agent.py` com `run-once` / `run-forever`, env var overrides). Tests: `tests/integration/test_cli_agent.py` cobre exit codes, JSON output, env override.
 
