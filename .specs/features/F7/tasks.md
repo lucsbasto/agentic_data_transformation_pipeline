@@ -14,7 +14,7 @@
 - ⚪ **F7.1** — `feat(F7): typed Settings via pydantic-settings`. `src/pipeline/config/settings.py` com `Settings(BaseSettings)` agregando todas envs (`DASHSCOPE_API_KEY`, `AGENT_RETRY_BUDGET`, `AGENT_LOOP_INTERVAL`, `AGENT_LOCK_PATH`, `MANIFEST_PATH`, `BRONZE_ROOT`, `SILVER_ROOT`, `GOLD_ROOT`, `LOG_LEVEL`, `LOG_FORMAT`). Precedence: `os.environ` > `.env` > defaults. Validators: paths abs, budgets ≥1, interval ≥1.0s. Tests: defaults, env override, .env override, validator rejects.
 - ⚪ **F7.2** — `feat(F7): wire Settings into CLI agent subcommand`. `pipeline.cli.agent` lê `Settings()` e usa como source-of-truth (substitui `os.getenv` direto). Mantém flags CLI como override-final. Tests: env → CLI flag wins; settings injected into `run_once`/`run_forever`.
 - ⚪ **F7.3** — `feat(F7): secret redaction in structlog processor`. Novo processor em `pipeline.agent._logging` mascara qualquer valor que case `*_KEY|*_TOKEN|*_SECRET|*_PASSWORD` (chave OR valor matching `sk-...`). Tests: dict nested, list, value-pattern, key-pattern, plaintext untouched.
-- ⚪ **F7.4** — `docs(F7): .env.example with every required var`. `.env.example` na raiz com chaves vazias + comentário 1-line por var. Atualiza `README.md` Setup section. Sem tests (doc-only).
+- ✅ **F7.4** — `docs(F7): .env.example with every required var`. Shipped — `.env.example` na raiz com chaves vazias + comentário 1-line por var. README Setup section updated.
 
 ## Container + runtime (2.x)
 
@@ -40,7 +40,7 @@
 - ⚪ **F7.15** — `feat(F7): Prometheus alert rules`. `deploy/prometheus/alerts.yml` com regras: `EscalationSpike` (rate(escalations_total[5m]) > 0.1), `LockHeldTooLong` (lock_held == 1 for 1h), `LoopStalled` (rate(iterations_total[10m]) == 0), `LayerLatencyHigh` (histogram_quantile(0.95) > 30s for 15m), `ManifestUnreachable` (probe_success{job="readyz"} == 0). Cada regra com `severity` + `runbook_url` annotation.
 - ⚪ **F7.16** — `feat(F7): Alertmanager config + routing`. `deploy/alertmanager/config.yml` com receivers: `slack-critical`, `slack-warn`, `email-fallback`; routing tree por severity; inhibit rules (ManifestUnreachable inibe LoopStalled). Webhook URLs via env (`SLACK_WEBHOOK_CRITICAL`, etc); compose `monitoring` profile inclui Alertmanager service.
 - ⚪ **F7.17** — `feat(F7): JSONL → webhook bridge for escalation events`. `src/pipeline/obs/escalation_bridge.py` tail `logs/agent.jsonl`, filter `event=="escalation"`, POST to webhook URL (env `ESCALATION_WEBHOOK_URL`); retry 3x exponencial; idempotência por `agent_run_id+batch_id+layer` em SQLite tracker (evita re-fire em restart). CLI subcommand `pipeline obs bridge`. Tests: 3 escalations → 3 POSTs; restart → no duplicate.
-- ⚪ **F7.18** — `docs(F7): runbooks per alert`. `docs/runbooks/{escalation_spike,lock_held,loop_stalled,layer_latency,manifest_unreachable}.md`; cada runbook com Symptom / Diagnosis / Mitigation / Postmortem-template. Liga via `runbook_url` annotation em F7.15. Sem tests.
+- ✅ **F7.18** — `docs(F7): runbooks per alert`. 5 runbooks shipped: escalation_spike, lock_held, loop_stalled, layer_latency, manifest_unreachable. Each: Symptom / Diagnosis / Mitigation / Verification / Postmortem-template. Linkable via runbook_url in F7.15 PromQL rules.
 
 ## Closeout (6.x)
 
