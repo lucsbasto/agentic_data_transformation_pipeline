@@ -6,15 +6,15 @@ The pipeline is organized as a modular architecture: Bronze (ingestion) -> Silve
 
 | Module | Purpose | Documentation |
 |--------|---------|---|
-| `pipeline.ingest` | Read raw data, transform to Bronze layer, write parquet. | [docs/api/ingest.md](ingest.md) (planned) |
-| `pipeline.silver` | Transform Bronze to Silver: dedup, normalization, PII masking, lead_id derivation. | [docs/api/silver.md](silver.md) (planned) |
-| `pipeline.gold` | Transform Silver to Gold: conversation scores, lead profiles, agent performance, competitor intelligence, and insights JSON. | [docs/api/gold.md](gold.md) (planned) |
-| `pipeline.agent` | Self-healing agent loop: observer, planner, executor, diagnoser, escalator. | [docs/api/agent.md](agent.md) (planned) |
-| `pipeline.llm` | Anthropic-compatible LLM client with caching and fallback retry logic. | [docs/api/llm.md](llm.md) (planned) |
-| `pipeline.state` | SQLite-backed runtime state store (see ADR-003). | [docs/api/state.md](state.md) (planned) |
-| `pipeline.schemas` | Schema declarations for all data layers and the state store. | [docs/api/schemas.md](schemas.md) (planned) |
-| `pipeline.errors` | Exception hierarchy for precise error handling. | [docs/api/errors.md](errors.md) (planned) |
-| `pipeline.cli` | Click-based command-line interface. | [docs/usage/cli.md](../usage/cli.md) (planned) |
+| `pipeline.ingest` | Read raw data, transform to Bronze layer, write parquet. | _planned_ |
+| `pipeline.silver` | Transform Bronze to Silver: dedup, normalization, PII masking, lead_id derivation. | [silver.md](silver.md) |
+| `pipeline.gold` | Transform Silver to Gold: conversation scores, lead profiles, agent performance, competitor intelligence, and insights JSON. | [gold.md](gold.md) |
+| `pipeline.agent` | Self-healing agent loop: observer, planner, executor, diagnoser, escalator. | [agent.md](agent.md) |
+| `pipeline.llm` | Anthropic-compatible LLM client with caching and fallback retry logic. | [llm.md](llm.md) |
+| `pipeline.state.manifest` | SQLite-backed runtime state store. | [manifest.md](manifest.md) |
+| `pipeline.schemas` | Schema declarations for all data layers and the state store. | _planned_ |
+| `pipeline.errors` | Exception hierarchy for precise error handling. | [errors.md](errors.md) |
+| `pipeline.cli` | Click-based command-line interface. | [../usage/cli.md](../usage/cli.md) |
 
 ## Public API Stability
 

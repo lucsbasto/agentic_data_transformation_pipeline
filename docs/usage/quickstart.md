@@ -122,4 +122,4 @@ Check output directories:
 - **Command reference**: See [docs/usage/cli.md](../usage/cli.md) for all CLI flags and options.
 - **Configuration**: See [docs/usage/configuration.md](../usage/configuration.md) for environment variables and tuning.
 - **Agent flow**: See [docs/agent-flow.md](../agent-flow.md) for self-healing loop internals.
-- **Troubleshooting**: See [docs/troubleshooting.md](../troubleshooting.md) for common errors and fixes.
+- **Troubleshooting**: See [docs/usage/troubleshooting.md](troubleshooting.md) for common errors and fixes.

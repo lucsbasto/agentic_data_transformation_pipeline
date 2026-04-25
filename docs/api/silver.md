@@ -125,7 +125,7 @@ See [errors.md](errors.md) for the full error taxonomy.
 ## Cross-References
 
 - **Flow walkthrough:** [silver-flow.md](../silver-flow.md) — Complete step-by-step narrative from Bronze read to Parquet write
-- **Agent recovery:** See [agent.md](../agent.md) for how the agent handles Silver errors and quarantine partitions
+- **Agent recovery:** See [agent.md](agent.md) for how the agent handles Silver errors and quarantine partitions
 - **Schemas:** `pipeline.schemas.silver.SILVER_SCHEMA` (column order), `pipeline.schemas.silver.SILVER_COLUMNS` (tuple of names)
 - **PII module:** `pipeline.silver.pii` — Regex patterns and masking logic
 - **Quarantine module:** `pipeline.silver.quarantine` — Rejection reasons and schema

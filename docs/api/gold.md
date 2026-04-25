@@ -187,7 +187,7 @@ See [errors.md](errors.md) for the full error taxonomy.
 ## Cross-References
 
 - **Flow walkthrough:** [gold-flow.md](../gold-flow.md) — Complete step-by-step narrative from Silver read to output write
-- **Agent recovery:** See [agent.md](../agent.md) for how the agent handles Gold errors and re-runs
+- **Agent recovery:** See [agent.md](agent.md) for how the agent handles Gold errors and re-runs
 - **Schemas:** `pipeline.schemas.gold` — All four table schemas plus enum values
 - **Persona module:** `pipeline.gold.persona` — `LeadAggregate` and `PersonaResult` types
 - **Writers:** `pipeline.gold.writer` — Atomic write functions for all four tables and insights JSON

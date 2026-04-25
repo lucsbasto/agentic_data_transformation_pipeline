@@ -406,5 +406,4 @@ except LLMCallError as e:
 - **[docs/f2-llm-handoff.md](../f2-llm-handoff.md)** — F2 LLM lane handoff and contracts.
 - **[docs/api/manifest.md](manifest.md)** — `llm_cache` table schema (part of state/manifest.db).
 - **[docs/usage/configuration.md](../usage/configuration.md)** — Environment variable setup.
-- **[docs/adr/ADR-003.md](../adr/ADR-003.md)** — Unified SQLite state store design decision.
 - **[pipeline.errors](errors.md)** — Exception hierarchy.
