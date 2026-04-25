@@ -162,7 +162,7 @@ def transform_gold(
         leads=len(aggregates),
     )
 
-    intent_inputs_lf = _compute_intent_score_inputs(silver_lf)
+    intent_inputs_lf = _compute_intent_score_inputs(silver_lf, conversation_scores_lf)
     lead_profile_df = _apply_persona_and_intent_score(
         lead_profile_skeleton_lf, persona_results, intent_inputs_lf
     ).collect()
@@ -327,13 +327,19 @@ def _apply_persona_and_intent_score(
     )
 
 
-def _compute_intent_score_inputs(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
+def _compute_intent_score_inputs(
+    silver_lf: pl.LazyFrame, conversation_scores_lf: pl.LazyFrame
+) -> pl.LazyFrame:
     """Aggregate Silver into the per-lead columns that
     :func:`pipeline.gold.intent_score.compute_intent_score` consumes.
 
     The eight non-persona columns from
     :data:`pipeline.gold.intent_score.INPUT_COLUMNS` are derived here;
-    ``persona`` is joined separately from the LLM lane output.
+    ``persona`` is joined separately from the LLM lane output. The
+    pre-computed ``conversation_scores_lf`` is threaded through to avoid
+    recomputing :func:`build_conversation_scores` on the same Silver
+    frame (Polars ``.cache()`` only memoises the scan, not downstream
+    aggregation).
     """
     inbound_text_per_lead = (
         silver_lf.filter(pl.col("direction") == "inbound")
@@ -362,7 +368,7 @@ def _compute_intent_score_inputs(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
         pl.col("conversation_outcome").sort_by("timestamp").drop_nulls().last().alias("outcome"),
     )
 
-    avg_lead_response_per_lead = _avg_lead_response_per_lead(silver_lf)
+    avg_lead_response_per_lead = _avg_lead_response_per_lead(conversation_scores_lf)
 
     phrase_inputs = inbound_text_per_lead.with_columns(
         pl.col("_inbound_text")
@@ -403,12 +409,12 @@ def _compute_intent_score_inputs(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def _avg_lead_response_per_lead(silver_lf: pl.LazyFrame) -> pl.LazyFrame:
+def _avg_lead_response_per_lead(conversation_scores_lf: pl.LazyFrame) -> pl.LazyFrame:
     """Per-lead mean of the conversation-level
-    ``avg_lead_response_sec`` (F3-RF-05). Reuses the
-    :func:`build_conversation_scores` output rather than re-walking
-    the pairwise sequence."""
-    conversation_scores_lf = build_conversation_scores(silver_lf)
+    ``avg_lead_response_sec`` (F3-RF-05). Consumes the already-built
+    ``conversation_scores_lf`` (computed once by
+    :func:`transform_gold`) — calling :func:`build_conversation_scores`
+    again here re-walked the pairwise sequence on every Gold run."""
     return conversation_scores_lf.group_by("lead_id", maintain_order=False).agg(
         pl.col("avg_lead_response_sec").mean().alias("avg_lead_response_sec")
     )
