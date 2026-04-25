@@ -9,7 +9,7 @@
 - ✅ **F4.0** — `docs(F4): scaffold spec/design/tasks and bump roadmap` (this commit; vira F4 para 🟡 spec'd no `ROADMAP.md`).
 - ✅ **F4.1** — `feat(F4): declare agent enums + dataclasses` (commit 6e05439). `src/pipeline/agent/types.py` com `ErrorKind`, `Layer`, `RunStatus`, `Fix`, `FailureRecord`, `AgentResult`; 11 tests em `tests/unit/test_agent_types.py`.
 - ✅ **F4.2** — `feat(F4): manifest migrations for agent_runs + agent_failures`. DDL + 6 métodos `ManifestDB` (`start_agent_run`, `end_agent_run`, `record_agent_failure`, `record_agent_fix`, `mark_agent_failure_escalated`, `count_agent_attempts`); 28 tests em `tests/unit/test_agent_state.py` (CRUD, idempotência, FK cascade, counters scoped por triple).
-- ⚪ **F4.3** — `feat(F4): filesystem lock with PID + stale detection` (`src/pipeline/agent/lock.py`). Tests: `tests/unit/test_agent_lock.py` cobre acquire/release, lock estagnado (PID morto), `AgentBusy` em PID vivo, signal cleanup.
+- ✅ **F4.3** — `feat(F4): filesystem lock with PID + stale detection` (`src/pipeline/agent/lock.py` + `AgentBusyError` em `pipeline.errors`). 16 tests em `tests/unit/test_agent_lock.py` cobrindo acquire fresh/reentrant/corrupt/empty, AgentBusyError on live peer, stale takeover (PID morto + mtime > stale_after_s), release com PID-match guard, context manager (release on exception), defaults. Signal handler integration ainda em F4.14 (loop).
 
 ## Diagnoser + fixes
 

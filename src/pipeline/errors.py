@@ -61,3 +61,14 @@ class LLMCacheError(LLMError):
 
 class LLMCallError(LLMError):
     """The LLM provider returned a non-retryable error."""
+
+
+# LEARN: F4 — the agent loop owns its own narrow failure modes. Keep
+# them under ``PipelineError`` so the entrypoint can still catch
+# everything with one ``except`` clause.
+class AgentError(PipelineError):
+    """Base class for agent-loop failures."""
+
+
+class AgentBusyError(AgentError):
+    """Another agent process already holds ``state/agent.lock``."""
