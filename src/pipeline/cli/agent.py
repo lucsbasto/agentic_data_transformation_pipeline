@@ -30,7 +30,7 @@ import click
 from pipeline.agent.diagnoser import _DiagnoseBudget
 from pipeline.agent.diagnoser import classify as _classify
 from pipeline.agent.escalator import DEFAULT_LOG_PATH, make_escalator
-from pipeline.agent.executor import DEFAULT_RETRY_BUDGET, Classifier
+from pipeline.agent.executor import Classifier
 from pipeline.agent.lock import AgentLock
 from pipeline.agent.loop import (
     DEFAULT_LOOP_INTERVAL_S,
@@ -39,6 +39,7 @@ from pipeline.agent.loop import (
 )
 from pipeline.agent.runners import make_fix_builder, make_runners_for
 from pipeline.agent.types import ErrorKind, Layer
+from pipeline.config import Settings as RuntimeSettings
 from pipeline.settings import Settings
 from pipeline.state.manifest import ManifestDB
 
@@ -46,10 +47,33 @@ DEFAULT_DIAGNOSE_BUDGET: Final[int] = 10
 """Per-``run_once`` LLM diagnose call cap (spec §7 D3)."""
 
 _DEFAULT_SOURCE_ROOT: Final[Path] = Path("data/raw")
-_DEFAULT_MANIFEST_PATH: Final[Path] = Path("state/manifest.db")
-_DEFAULT_BRONZE_ROOT: Final[Path] = Path("data/bronze")
-_DEFAULT_SILVER_ROOT: Final[Path] = Path("data/silver")
-_DEFAULT_GOLD_ROOT: Final[Path] = Path("data/gold")
+"""Source-root default. Not in :class:`pipeline.config.Settings` because
+``data/raw`` is an upstream input, not a managed output path."""
+
+
+def _field_default(name: str) -> Any:
+    """Read a :class:`RuntimeSettings` field default WITHOUT instantiating
+    (avoids the required ``DASHSCOPE_API_KEY`` validation at decoration
+    time). Lets us keep ``--help`` output stable on a fresh checkout."""
+    return RuntimeSettings.model_fields[name].default
+
+
+def _load_runtime_settings() -> RuntimeSettings:
+    """Load :class:`pipeline.config.Settings` (F7.2) with a friendly
+    error when the required ``DASHSCOPE_API_KEY`` is missing.
+
+    The CLI surface should never spew a Pydantic stack trace at an
+    operator; we translate validation failure into a one-line
+    ``click.UsageError`` so ``pipeline agent --help`` style discovery
+    stays painless even on a fresh machine."""
+    try:
+        return RuntimeSettings()  # type: ignore[call-arg]
+    except Exception as exc:  # pragma: no cover - exercised by test
+        msg = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        raise click.UsageError(
+            "agent runtime config invalid — set DASHSCOPE_API_KEY (and any "
+            f"required AGENT_* envs) in your environment or .env file. ({msg})"
+        ) from exc
 
 
 def _make_default_classifier(diagnose_budget: int) -> Classifier:
@@ -87,35 +111,35 @@ def _common_options[F: Callable[..., Any]](fn: F) -> F:
         click.option(
             "--bronze-root",
             type=click.Path(file_okay=False, path_type=Path),
-            default=_DEFAULT_BRONZE_ROOT,
+            default=_field_default("BRONZE_ROOT"),
             show_default=True,
             help="Bronze partition root.",
         ),
         click.option(
             "--silver-root",
             type=click.Path(file_okay=False, path_type=Path),
-            default=_DEFAULT_SILVER_ROOT,
+            default=_field_default("SILVER_ROOT"),
             show_default=True,
             help="Silver partition root.",
         ),
         click.option(
             "--gold-root",
             type=click.Path(file_okay=False, path_type=Path),
-            default=_DEFAULT_GOLD_ROOT,
+            default=_field_default("GOLD_ROOT"),
             show_default=True,
             help="Gold table root.",
         ),
         click.option(
             "--manifest-path",
             type=click.Path(dir_okay=False, path_type=Path),
-            default=_DEFAULT_MANIFEST_PATH,
+            default=_field_default("MANIFEST_PATH"),
             show_default=True,
             help="SQLite manifest path.",
         ),
         click.option(
             "--retry-budget",
             type=int,
-            default=DEFAULT_RETRY_BUDGET,
+            default=_field_default("AGENT_RETRY_BUDGET"),
             show_default=True,
             envvar="AGENT_RETRY_BUDGET",
             help="Retry budget per (batch_id, layer, error_class).",
@@ -123,7 +147,7 @@ def _common_options[F: Callable[..., Any]](fn: F) -> F:
         click.option(
             "--diagnose-budget",
             type=int,
-            default=DEFAULT_DIAGNOSE_BUDGET,
+            default=_field_default("AGENT_DIAGNOSE_BUDGET"),
             show_default=True,
             envvar="AGENT_DIAGNOSE_BUDGET",
             help="LLM diagnose call cap per run_once.",
@@ -131,7 +155,7 @@ def _common_options[F: Callable[..., Any]](fn: F) -> F:
         click.option(
             "--lock-path",
             type=click.Path(dir_okay=False, path_type=Path),
-            default=Path("state/agent.lock"),
+            default=_field_default("AGENT_LOCK_PATH"),
             show_default=True,
             envvar="AGENT_LOCK_PATH",
             help="Filesystem lock path.",
@@ -155,6 +179,7 @@ def run_once_cmd(
     lock_path: Path,
 ) -> None:
     """Run one iteration of the agent loop and exit."""
+    _load_runtime_settings()  # F7.2: friendly-fail on missing DASHSCOPE_API_KEY
     settings = Settings.load()
     runners_for = make_runners_for(
         source_root=source_root,
@@ -212,6 +237,7 @@ def run_forever_cmd(
     max_iters: int | None,
 ) -> None:
     """Run the agent loop continuously."""
+    _load_runtime_settings()  # F7.2: friendly-fail on missing DASHSCOPE_API_KEY
     settings = Settings.load()
     runners_for = make_runners_for(
         source_root=source_root,

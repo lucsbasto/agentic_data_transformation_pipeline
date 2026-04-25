@@ -27,6 +27,8 @@ def temp_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # calls — pin fakes (mirrors the F2/F3 CLI test fixtures).
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
+    # F7.2: pipeline.config.Settings now gates the CLI; pin DashScope key.
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-dashscope-test")
     return tmp_path
 
 
@@ -142,3 +144,48 @@ def test_run_forever_stops_after_max_iters(
     payload = _last_json_line(result.output)
     assert payload["iterations"] == 2
     assert payload["last_status"] == "COMPLETED"
+
+
+# ---------------------------------------------------------------------------
+# F7.2 — Settings wiring + flag override + friendly error.
+# ---------------------------------------------------------------------------
+
+
+def test_run_once_friendly_error_when_dashscope_key_missing(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec F7.2: missing DASHSCOPE_API_KEY → one-line UsageError, not a
+    Pydantic ValidationError stack trace."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "raw").mkdir(parents=True)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
+    result = runner.invoke(cli, ["agent", "run-once"])
+    assert result.exit_code != 0
+    assert "DASHSCOPE_API_KEY" in result.output
+    # No Pydantic stack trace exposed to the operator.
+    assert "Traceback" not in result.output
+
+
+def test_run_once_uses_settings_default_when_flag_absent(
+    runner: CliRunner, temp_workspace: Path
+) -> None:
+    """Help output reflects pipeline.config.Settings field defaults."""
+    result = runner.invoke(cli, ["agent", "run-once", "--help"])
+    assert result.exit_code == 0
+    # Field defaults from pipeline.config.Settings.
+    assert "data/bronze" in result.output
+    assert "state/manifest.db" in result.output
+
+
+def test_run_once_cli_flag_overrides_env_var(
+    runner: CliRunner, temp_workspace: Path
+) -> None:
+    """CLI flags remain final precedence — they must beat AGENT_* env."""
+    result = runner.invoke(
+        cli,
+        ["agent", "run-once", "--retry-budget", "7"],
+        env={"AGENT_RETRY_BUDGET": "2"},
+    )
+    assert result.exit_code == 0, result.output
