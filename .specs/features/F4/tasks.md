@@ -22,7 +22,7 @@
 ## Observer + planner + executor
 
 - ✅ **F4.9** — `feat(F4): observer scans pending batches`. `src/pipeline/agent/observer.py` enumera `source_root/*.parquet`, computa identity, consulta `batches` table; pending iff missing OR FAILED OR stale IN_PROGRESS (default 1h, configurável). 19 tests (`test_agent_observer.py`) cobrindo discover empty/sorted, is_pending missing/FAILED/COMPLETED/fresh-IP/stale-IP/unparseable-ts/naive-ts, scan end-to-end com sorted output determinístico.
-- ⚪ **F4.10** — `feat(F4): planner emits sequential bronze→silver→gold plan` (`src/pipeline/agent/planner.py` pula layers já COMPLETED). Tests: `tests/unit/test_agent_planner.py`.
+- ✅ **F4.10** — `feat(F4): planner emits sequential bronze→silver→gold plan`. `src/pipeline/agent/planner.py` com `LAYER_ORDER` pinned, `is_layer_completed` (consulta `get_latest_run`), `plan(batch_id, *, manifest, runners)` retorna subset em ordem canônica. Pure (no side effects). 12 tests cobrindo is_layer_completed (no-runs/COMPLETED/FAILED/isolated), plan (fresh/sorted/skip-COMPLETED/all-done/retry-FAILED/runner-identity/missing-runner-noop/order-pinned).
 - ⚪ **F4.11** — `feat(F4): executor with retry budget per (batch_id, layer, error_class)` (`src/pipeline/agent/executor.py`). Tests: `tests/unit/test_agent_executor.py` cobre 3 retries → escala, fix sucesso, fix falha, `UNKNOWN` escala imediato.
 
 ## Escalator + logging
