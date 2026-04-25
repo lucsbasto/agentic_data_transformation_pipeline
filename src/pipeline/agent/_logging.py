@@ -13,12 +13,69 @@ output across runs (NFR-06).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import structlog
+
+# F7.3 — secret redaction primitives.
+_REDACTED: Final[str] = "<redacted>"
+_SECRET_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r".*(_KEY|_TOKEN|_SECRET|_PASSWORD)$",
+    re.IGNORECASE,
+)
+"""Match any field name ending in `_KEY`, `_TOKEN`, `_SECRET`, or
+`_PASSWORD` (case-insensitive). Examples that match:
+``DASHSCOPE_API_KEY``, ``slack_webhook_token``, ``foo_secret``,
+``DB_PASSWORD``."""
+
+_SECRET_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"sk-[A-Za-z0-9]{20,}",
+)
+"""Match Anthropic / DashScope / OpenAI-style API keys that may have
+leaked into a payload via an exception message or upstream response."""
+
+
+def redact_secrets(value: Any, *, _key: str | None = None) -> Any:
+    """Recursively mask secret-bearing values in ``value``.
+
+    Two heuristics:
+
+    1. If ``_key`` matches :data:`_SECRET_KEY_PATTERN`, return
+       ``"<redacted>"`` regardless of the value's content.
+    2. If ``value`` is a string and contains a substring matching
+       :data:`_SECRET_VALUE_PATTERN` (e.g. ``sk-...``), return
+       ``"<redacted>"`` even when the key itself looks innocuous.
+
+    Dicts and lists / tuples are walked depth-first; other primitive
+    types pass through unchanged. Designed to be cheap on the agent
+    loop hot path (regex pre-compiled, no copy when nothing needs
+    masking).
+    """
+    if _key is not None and _SECRET_KEY_PATTERN.fullmatch(_key):
+        return _REDACTED
+    if isinstance(value, str):
+        return _REDACTED if _SECRET_VALUE_PATTERN.search(value) else value
+    if isinstance(value, dict):
+        return {k: redact_secrets(v, _key=k) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        walked = [redact_secrets(item) for item in value]
+        return tuple(walked) if isinstance(value, tuple) else walked
+    return value
+
+
+def redact_secrets_processor(
+    _logger: Any, _method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Structlog processor wrapper around :func:`redact_secrets`.
+
+    Signature matches structlog's ``Processor`` protocol so this can
+    be slotted into a ``structlog.configure(processors=[...])`` chain.
+    """
+    return redact_secrets(event_dict)  # type: ignore[no-any-return]
 
 DEFAULT_LOG_PATH: Final[Path] = Path("logs/agent.jsonl")
 """Sink for structured JSON events. Same path as the escalator's
@@ -99,13 +156,17 @@ class AgentEventLogger:
         ``datetime.now`` directly — so deterministic-replay tests
         can pin it.
         """
+        # F7.3: scrub secret-bearing keys/values BEFORE the payload
+        # touches disk or stdout. Catches stray API keys or tokens
+        # that may have been spliced in via runner-level **fields.
+        safe_fields = redact_secrets(fields)
         payload: dict[str, Any] = {
             "event": name,
             "ts": self._clock().isoformat(),
-            **fields,
+            **safe_fields,
         }
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         with self._log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        self._stdout.info(name, **fields)
+        self._stdout.info(name, **safe_fields)
         return payload

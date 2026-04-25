@@ -21,6 +21,8 @@ from pipeline.agent._logging import (
     AgentEventLogger,
     default_clock,
     fixed_clock,
+    redact_secrets,
+    redact_secrets_processor,
 )
 
 _FIXED = datetime(2026, 4, 25, 12, 0, 0, tzinfo=UTC)
@@ -160,3 +162,91 @@ def test_default_log_path_matches_design() -> None:
     """``logs/agent.jsonl`` per design §9 + §13 — pin so a quiet
     rename surfaces in CI."""
     assert Path("logs/agent.jsonl") == DEFAULT_LOG_PATH
+
+
+# ---------------------------------------------------------------------------
+# F7.3 — secret redaction processor.
+# ---------------------------------------------------------------------------
+
+
+def test_redact_secrets_masks_nested_dict_secret_keys() -> None:
+    """A nested dict whose key matches *_KEY/_TOKEN/_SECRET/_PASSWORD
+    must be replaced with ``"<redacted>"`` no matter the depth."""
+    payload = {
+        "outer": {
+            "DASHSCOPE_API_KEY": "sk-secret-value-1234567890abcdef",
+            "inner": {"slack_token": "xoxb-abc-123"},
+        }
+    }
+    out = redact_secrets(payload)
+    assert out["outer"]["DASHSCOPE_API_KEY"] == "<redacted>"
+    assert out["outer"]["inner"]["slack_token"] == "<redacted>"
+
+
+def test_redact_secrets_walks_lists_of_dicts() -> None:
+    payload = {
+        "secrets": [
+            {"DB_PASSWORD": "hunter2"},
+            {"unrelated": "ok"},
+        ]
+    }
+    out = redact_secrets(payload)
+    assert out["secrets"][0]["DB_PASSWORD"] == "<redacted>"
+    assert out["secrets"][1]["unrelated"] == "ok"
+
+
+def test_redact_secrets_matches_sk_value_pattern() -> None:
+    """A key whose name looks innocuous but holds an ``sk-...`` API
+    key must still be redacted on the value-pattern path."""
+    payload = {"raw_response": "got back token sk-1234567890ABCDEFGHIJ"}
+    out = redact_secrets(payload)
+    assert out["raw_response"] == "<redacted>"
+
+
+def test_redact_secrets_case_insensitive_key_match() -> None:
+    """Key matching is case-insensitive — ``api_key``, ``API_KEY``,
+    and ``Api_Key`` all redact identically."""
+    payload = {
+        "api_key": "v1",
+        "API_KEY": "v2",
+        "Api_Key": "v3",
+    }
+    out = redact_secrets(payload)
+    assert out == {
+        "api_key": "<redacted>",
+        "API_KEY": "<redacted>",
+        "Api_Key": "<redacted>",
+    }
+
+
+def test_redact_secrets_leaves_plaintext_untouched() -> None:
+    """Innocuous strings, ints, bools, None, and primitive-only
+    structures pass through verbatim — no false positives."""
+    payload = {
+        "agent_run_id": "abc123",
+        "iter": 5,
+        "ok": True,
+        "missing": None,
+        "items": ["a", "b", 42],
+    }
+    out = redact_secrets(payload)
+    assert out == payload
+
+
+def test_redact_secrets_processor_signature_matches_structlog() -> None:
+    """The 3-arg wrapper plugs into ``structlog.configure(processors=[...])``
+    without any adapter — same shape as built-in processors."""
+    event_dict = {"event": "x", "DB_PASSWORD": "leaky"}
+    out = redact_secrets_processor(None, "info", event_dict)
+    assert out == {"event": "x", "DB_PASSWORD": "<redacted>"}
+
+
+def test_event_redacts_secret_fields_before_writing(tmp_path: Path) -> None:
+    """End-to-end: AgentEventLogger.event writes a redacted JSONL line
+    when called with a key that matches the secret pattern."""
+    log_path = tmp_path / "agent.jsonl"
+    logger = AgentEventLogger(log_path=log_path, clock=fixed_clock(_FIXED))
+    logger.event(EVENT_LOOP_STARTED, DASHSCOPE_API_KEY="sk-leaked-1234567890abcdef")
+    line = log_path.read_text(encoding="utf-8").strip()
+    parsed = json.loads(line)
+    assert parsed["DASHSCOPE_API_KEY"] == "<redacted>"
