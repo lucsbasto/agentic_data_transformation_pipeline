@@ -296,8 +296,40 @@ def test_run_once_isolates_failure_per_batch(db: ManifestDB, tmp_path: Path) -> 
 def test_run_once_releases_lock_even_when_runner_raises_baseexception(
     db: ManifestDB, tmp_path: Path
 ) -> None:
-    """A KeyboardInterrupt (or similar BaseException) must still
-    leave the lock cleaned up so the next run can acquire it."""
+    """A non-KeyboardInterrupt BaseException must still leave the
+    lock cleaned up. The agent_run row is sealed FAILED."""
+    raw = tmp_path / "raw"
+    bid_a = _write_source_parquet(raw / "a.parquet", marker="a")
+    lock_path = tmp_path / "agent.lock"
+
+    def explode() -> None:
+        raise SystemExit(1)
+
+    runners = {Layer.BRONZE: explode}
+    with pytest.raises(SystemExit):
+        run_once(
+            manifest=db,
+            source_root=raw,
+            runners_for=lambda bid: runners if bid == bid_a else {},
+            classify=_noop_classifier,
+            build_fix=_no_fix,
+            escalate=_record_escalations([]),
+            lock=AgentLock(lock_path),
+            event_logger=_logger(tmp_path),
+        )
+    assert not lock_path.exists()
+    conn = db._require_conn()
+    statuses = [row["status"] for row in conn.execute("SELECT status FROM agent_runs;").fetchall()]
+    assert statuses == ["FAILED"]
+
+
+def test_run_once_seals_agent_run_as_interrupted_on_keyboard_interrupt(
+    db: ManifestDB, tmp_path: Path
+) -> None:
+    """Spec F4-RF-09: Ctrl-C / SIGINT mid-iteration must produce
+    `RunStatus.INTERRUPTED` on the agent_run row, not FAILED — the
+    spec separates 'operator stopped me' from 'I crashed' so the
+    observer's next sweep can decide whether to retry."""
     raw = tmp_path / "raw"
     bid_a = _write_source_parquet(raw / "a.parquet", marker="a")
     lock_path = tmp_path / "agent.lock"
@@ -318,7 +350,6 @@ def test_run_once_releases_lock_even_when_runner_raises_baseexception(
             event_logger=_logger(tmp_path),
         )
     assert not lock_path.exists()
-    # ``agent_runs`` row was sealed with FAILED status.
     conn = db._require_conn()
     statuses = [row["status"] for row in conn.execute("SELECT status FROM agent_runs;").fetchall()]
-    assert statuses == ["FAILED"]
+    assert statuses == ["INTERRUPTED"]

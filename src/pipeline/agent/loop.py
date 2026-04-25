@@ -128,6 +128,13 @@ def run_once(
                 # F4-RF-08: one failed batch must NOT stop sibling
                 # batches.
                 continue
+    except KeyboardInterrupt:
+        # Spec F4-RF-09: SIGINT / Ctrl-C must seal the agent_run row
+        # as INTERRUPTED so the next iteration can pick up cleanly,
+        # rather than masquerading as a hard FAILED that would
+        # trigger a retry of work the operator explicitly cancelled.
+        status = RunStatus.INTERRUPTED
+        raise
     except BaseException:
         status = RunStatus.FAILED
         raise

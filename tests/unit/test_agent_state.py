@@ -443,6 +443,83 @@ def test_count_agent_attempts_rejects_invalid_error_class(db: ManifestDB) -> Non
 
 
 # ---------------------------------------------------------------------------
+# latest_agent_failure_id.
+# ---------------------------------------------------------------------------
+
+
+def test_latest_agent_failure_id_returns_none_when_no_rows(db: ManifestDB) -> None:
+    assert (
+        db.latest_agent_failure_id(
+            batch_id="bid01", layer="silver", error_class="regex_break"
+        )
+        is None
+    )
+
+
+def test_latest_agent_failure_id_returns_highest_attempts_row(db: ManifestDB) -> None:
+    """Ordered by ``attempts DESC`` so the executor flips the
+    correct ``escalated`` row even when ``ts`` collides on a fast
+    test run."""
+    agent_run_id = db.start_agent_run()
+    failure_ids: list[str] = []
+    for attempt in range(1, 4):
+        failure_ids.append(
+            db.record_agent_failure(
+                agent_run_id=agent_run_id,
+                batch_id="bid01",
+                layer="silver",
+                error_class="regex_break",
+                attempts=attempt,
+                last_error_msg=f"attempt {attempt}",
+            )
+        )
+    latest = db.latest_agent_failure_id(
+        batch_id="bid01", layer="silver", error_class="regex_break"
+    )
+    assert latest == failure_ids[-1]
+
+
+def test_latest_agent_failure_id_isolates_by_triple(db: ManifestDB) -> None:
+    agent_run_id = db.start_agent_run()
+    silver_id = db.record_agent_failure(
+        agent_run_id=agent_run_id,
+        batch_id="bid01",
+        layer="silver",
+        error_class="regex_break",
+        attempts=1,
+        last_error_msg="x",
+    )
+    db.record_agent_failure(
+        agent_run_id=agent_run_id,
+        batch_id="bid01",
+        layer="gold",
+        error_class="regex_break",
+        attempts=1,
+        last_error_msg="x",
+    )
+    assert (
+        db.latest_agent_failure_id(
+            batch_id="bid01", layer="silver", error_class="regex_break"
+        )
+        == silver_id
+    )
+
+
+def test_latest_agent_failure_id_rejects_invalid_layer(db: ManifestDB) -> None:
+    with pytest.raises(ManifestError, match="invalid run layer"):
+        db.latest_agent_failure_id(
+            batch_id="bid01", layer="platinum", error_class="regex_break"
+        )
+
+
+def test_latest_agent_failure_id_rejects_invalid_error_class(db: ManifestDB) -> None:
+    with pytest.raises(ManifestError, match="invalid error_class"):
+        db.latest_agent_failure_id(
+            batch_id="bid01", layer="silver", error_class="cosmic_ray"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Schema integrity — DDL idempotence + cascade.
 # ---------------------------------------------------------------------------
 

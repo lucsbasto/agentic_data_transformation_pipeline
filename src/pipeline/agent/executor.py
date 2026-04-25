@@ -218,14 +218,9 @@ class Executor:
     ) -> str | None:
         """Look up the most recent ``agent_failures`` row for the
         triple — used at budget exhaustion to mark exactly the row
-        that triggered the escalation."""
-        conn = self._manifest._require_conn()
-        # Order by ``attempts`` (the ordinal we wrote) instead of
-        # ``ts`` (second-resolution; ties on a fast test run).
-        row = conn.execute(
-            "SELECT failure_id FROM agent_failures "
-            "WHERE batch_id = ? AND layer = ? AND error_class = ? "
-            "ORDER BY attempts DESC LIMIT 1;",
-            (batch_id, layer.value, kind.value),
-        ).fetchone()
-        return None if row is None else str(row["failure_id"])
+        that triggered the escalation. Delegates to the manifest's
+        public API so the executor stays decoupled from SQLite
+        details."""
+        return self._manifest.latest_agent_failure_id(
+            batch_id=batch_id, layer=layer.value, error_class=kind.value
+        )

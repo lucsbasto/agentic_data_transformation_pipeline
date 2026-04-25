@@ -743,6 +743,35 @@ class ManifestDB:
         ).fetchone()
         return int(row[0])
 
+    def latest_agent_failure_id(
+        self, *, batch_id: str, layer: str, error_class: str
+    ) -> str | None:
+        """Return the ``failure_id`` of the most recent
+        ``agent_failures`` row for the
+        ``(batch_id, layer, error_class)`` triple, or ``None`` when
+        no row exists.
+
+        Ordered by ``attempts DESC`` (the ordinal we wrote) instead
+        of ``ts`` (second resolution; ties on a fast test run). The
+        executor needs this to flip ``escalated=1`` on exactly the
+        row that triggered the escalation after the retry budget is
+        exhausted (F4 design §6).
+        """
+        self._require_layer(layer)
+        if error_class not in AGENT_ERROR_KINDS:
+            raise ManifestError(
+                f"invalid error_class {error_class!r}; expected one of "
+                f"{AGENT_ERROR_KINDS}"
+            )
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT failure_id FROM agent_failures "
+            "WHERE batch_id = ? AND layer = ? AND error_class = ? "
+            "ORDER BY attempts DESC LIMIT 1;",
+            (batch_id, layer, error_class),
+        ).fetchone()
+        return None if row is None else str(row["failure_id"])
+
     # ------------------------------------------------------------------ internals
 
     def _require_conn(self) -> sqlite3.Connection:
