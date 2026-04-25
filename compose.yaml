@@ -1,0 +1,46 @@
+# Local production-mode compose file (F7.6).
+#
+# Boots the agent loop using the Dockerfile image, mounts named volumes
+# for the three writable trees the loop owns (data/, logs/, state/),
+# and pulls every secret + tunable from .env (managed at the repo root).
+#
+# Usage:
+#   docker compose up -d           # build + start agent run-forever
+#   docker compose logs -f agent   # tail JSON event log via stdout sink
+#   docker compose down            # stop (volumes preserved)
+#   docker compose down -v         # stop + delete volumes (fresh state)
+#
+# Stack-extension monitoring (Prometheus / Grafana / Alertmanager) lives
+# in compose.monitoring.yaml under the `monitoring` profile (F7.13).
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pipeline:latest
+    container_name: pipeline-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["agent", "run-forever"]
+    volumes:
+      - pipeline-data:/app/data
+      - pipeline-logs:/app/logs
+      - pipeline-state:/app/state
+    healthcheck:
+      # Mirrors the Dockerfile HEALTHCHECK so docker compose ps surfaces
+      # liveness independent of the in-image probe (compose overrides it).
+      test: ["CMD", "python", "-m", "pipeline", "agent", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pipeline-data:
+    name: pipeline-data
+  pipeline-logs:
+    name: pipeline-logs
+  pipeline-state:
+    name: pipeline-state
