@@ -2,8 +2,8 @@
 
 ## Estado atual
 
-- Fase: **M3 em curso — F4 spec'd**
-- Próximo passo: implementar tasks F4.1–F4.23 conforme `.specs/features/F4/tasks.md` (começar por F4.1 `feat(F4): declare agent enums + dataclasses`).
+- Fase: **M3 em curso — F4 backbone shipped, runner wiring + F5 pendentes**
+- Próximo passo: WIRING-1/-2 (real F1/F2/F3 runner adapters + per-kind fix dispatcher no `pipeline.cli.agent`) seguido de F4.20 smoke + F5 (CLI watch + observabilidade pública).
 
 ## Milestones
 
@@ -44,8 +44,10 @@ Orquestrador e CLI. Pipeline vira pipeline vivo.
 
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
-| **F4 — Agent core (loop + auto-correção)** | 🟡 spec'd (2026-04-24) | F1 | Complex |
-| **F5 — Observability + CLI** | ⚪ blocked | F4 | Medium |
+| **F4 — Agent core (loop + auto-correção)** | 🟢 backbone shipped (2026-04-25) | F1 | Complex |
+| **F5 — Observability + CLI** | ⚪ blocked | F4 wiring | Medium |
+
+**Status da entrega F4 (parcial):** F4.0..F4.19 + F4.21 + F4.22 + F4.23 shipped; F4.20 (smoke 153k) deferido até real runner wiring landar. 866 testes verdes + 1 documented skip, ruff + mypy strict limpos. Lane de review 3-agent (`.specs/features/F4/REVIEWS/`): 0 critical não-resolvidos; 2 HIGH (`SIGINT→INTERRUPTED`, executor `_require_conn` leak) fechados em 846cbca; 8 MED + 8 LOW backlog em `.specs/features/F4/tasks.md` "F4 Follow-ups backlog". Runner wiring (`_empty_runners`/`_default_build_fix` placeholders → real F1/F2/F3 adapters + per-kind fix dispatcher) bloqueia M3 fechar de fato.
 
 **Critério de fim do M3:** `python -m pipeline watch` mantém pipeline vivo. Injeção de falha sintética dispara ciclo diagnose→fix→retry→escalate documentado em log estruturado.
 

@@ -46,8 +46,52 @@
 ## Closeout
 
 - ✅ **F4.21** — `docs(F4): walkthrough of agent flow + fault demo`. `docs/agent-flow.md` espelha `docs/silver-flow.md` / `docs/gold-flow.md` em 12 seções (entry → lock → agent_runs → observer → planner → executor → diagnoser → fix dispatch → escalation → bookkeeping → run_forever → events → demo → open follow-ups). Documenta scope cuts: runner wiring placeholder + smoke F4.20 blocked + signal handlers pendentes + had_quarantine deferred + F2 regex hookup deferred.
-- ⚪ **F4.22** — Lane de review (code-reviewer + security-reviewer + critic) em `.specs/features/F4/REVIEWS/`. Critical issues → tasks F4.23+.
-- ⚪ **F4.23** — `docs(F4): close review lane and flip roadmap status` (M3 parcial → F5 desbloqueado).
+- ✅ **F4.22** — Lane de review (code-reviewer + security-reviewer + critic) shipped no commit 46554fd em `.specs/features/F4/REVIEWS/`. 0 critical não-resolvidos; 2 HIGH (SIGINT→INTERRUPTED + executor `_require_conn` leak) endereçados no commit 846cbca; 8 MED + 8 LOW deferidos como follow-ups (ver §F4 Follow-ups backlog abaixo).
+- ✅ **F4.23** — `docs(F4): close review lane and flip roadmap status`. M3 parcial: F4 backbone shipped; F5 + runner wiring permanecem como follow-ups antes do M3 fechar de fato.
+
+---
+
+## F4 Follow-ups backlog (post-review)
+
+Open items consolidated from `REVIEWS/code-reviewer.md`, `REVIEWS/security-reviewer.md`, `REVIEWS/critic.md`. Each entry maps to a future commit; F4 milestone fecha sem essas mas o próximo trabalho de F5 / runner wiring deveria endereçá-las.
+
+### Code quality (5 MED + 4 LOW open)
+
+| ID | Severity | Source | Item |
+|---|---|---|---|
+| MED-1 | MED | code-reviewer | CLI imports private `_DiagnoseBudget` — promote to `DiagnoseBudget` or expose `make_classifier` factory. |
+| MED-2 | MED | code-reviewer + critic | Retry budget per `(batch_id, layer)` vs design's per-triple. Decide one, update the other; consider calling `count_agent_attempts` for cumulative semantics. |
+| MED-4 | MED | code-reviewer | Escalator `_set_run_failed` hardcodes `duration_ms=0` — propagate real elapsed time or use `None` sentinel. |
+| MED-5 | MED | code-reviewer | `agent_run_id` from `uuid.uuid4()` breaks strict NFR-06 byte-stable replay. Accept optional `agent_run_id=` parameter. |
+| MAJOR | MAJOR | critic | `run_forever` lacks per-iteration error boundary. Wrap `run_once` in try/except + log + continue. |
+| LOW-1..L4 | LOW | code-reviewer | Various: thread-safety annotation on `_DiagnoseBudget`, double-sort in observer, dict-mutation in inject_out_of_range, `Path("logs/agent.jsonl")` duplicated between escalator and `_logging.py`. |
+
+### Security (3 MED + 4 LOW open)
+
+| ID | Severity | Source | Item |
+|---|---|---|---|
+| SEC-M1 | MED | security-reviewer | Sanitize control chars from `str(exc)` before interpolation in diagnoser stage-2 LLM prompt. |
+| SEC-M2 | MED | security-reviewer | ReDoS on LLM-generated regex — add signal-based timeout in `validate_regex` and at Silver consumption sites. |
+| SEC-M3 | MED | security-reviewer + code-reviewer MED-3 | `AgentLock.acquire()` TOCTOU window — switch to `O_CREAT|O_EXCL` for atomic lock creation. |
+| SEC-L1..L4 | LOW | security-reviewer | umask 0o077 on agent state files, sanitize paths from log messages, validate `inject_fault.py --target` is inside `data/` tree, document `save_override` single-writer assumption. |
+
+### Spec / docs
+
+| ID | Source | Item |
+|---|---|---|
+| F4-RF-09-extend | critic | Register SIGINT/SIGTERM signal handlers that set `stop_event.set()` for `run_forever` (the `KeyboardInterrupt → INTERRUPTED` half is closed in 846cbca). |
+| design-§1 | critic | Update design.md §1 to remove phantom `state.py` (CRUD lives in `ManifestDB`). |
+| docs-budget | critic | Update `docs/agent-flow.md` §4 once budget semantics decision lands. |
+
+### Real wiring (deferred from F4 by design)
+
+| ID | Item |
+|---|---|
+| WIRING-1 | Replace `_empty_runners` placeholder with adapters calling `pipeline.bronze.ingest.run` / `pipeline.silver.transform.run` / `pipeline.gold.transform.run`. |
+| WIRING-2 | Replace `_default_build_fix` placeholder with per-kind dispatcher mapping each `ErrorKind` to the corresponding `pipeline.agent.fixes.<kind>.build_fix(...)` factory. |
+| WIRING-3 | Wire F2 PII regex callers (`_EMAIL_RE`, `_CPF_RE`, `_PHONE_RE`, etc.) to consult `pipeline.silver.regex.load_override` before falling back to compiled defaults. |
+| WIRING-4 | Add `had_quarantine` column to `runs` (DDL + migration) and have the out_of_range fix flip it on the latest run row in addition to the `agent_failures.last_fix_kind` ack. |
+| F4.20 | Run smoke after WIRING-1/-2 land; record cold/warm timing in `.specs/features/F4/SMOKE.md`. |
 
 ---
 
