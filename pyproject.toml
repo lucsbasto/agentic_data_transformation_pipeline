@@ -126,4 +126,5 @@ addopts = [
 ]
 markers = [
     "integration: end-to-end tests that touch the filesystem",
+    "fault_campaign: FIC fault-injection campaign tests (exhaustive scenario coverage)",
 ]
