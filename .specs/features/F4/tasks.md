@@ -27,7 +27,7 @@
 
 ## Escalator + logging
 
-- ⚪ **F4.12** — `feat(F4): escalator emits structured JSON alert + suggested fix table` (`src/pipeline/agent/escalator.py`). Tests: `tests/unit/test_agent_escalator.py` valida shape JSON, stdout summary, manifest update (`escalated=1`, `runs.status='FAILED'`).
+- ✅ **F4.12** — `feat(F4): escalator emits structured JSON alert + suggested fix table`. `src/pipeline/agent/escalator.py` com `SUGGESTED_FIX` table (5 entradas, uma por ErrorKind), `build_payload` (event/batch_id/layer/error_class/last_error_msg≤512/suggested_fix/ts), `write_event` (atomic append JSONL com mkdir parent), `escalate` end-to-end + opcional flip da latest run para FAILED, `make_escalator` curried adapter compatível com Executor.Escalator. 16 tests cobrindo every-kind hint, payload canonical+truncate, JSONL append/parent-mkdir, escalate happy/no-run/already-failed, make_escalator wiring, default path pinned.
 - ⚪ **F4.13** — `feat(F4): structlog JSON sink for logs/agent.jsonl` (`src/pipeline/agent/_logging.py` + clock injetável). Tests: `tests/unit/test_agent_logging.py` com clock mockado valida log byte-idêntico.
 
 ## Loop + CLI
