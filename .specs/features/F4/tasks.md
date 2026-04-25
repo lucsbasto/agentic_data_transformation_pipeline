@@ -28,7 +28,7 @@
 ## Escalator + logging
 
 - ✅ **F4.12** — `feat(F4): escalator emits structured JSON alert + suggested fix table`. `src/pipeline/agent/escalator.py` com `SUGGESTED_FIX` table (5 entradas, uma por ErrorKind), `build_payload` (event/batch_id/layer/error_class/last_error_msg≤512/suggested_fix/ts), `write_event` (atomic append JSONL com mkdir parent), `escalate` end-to-end + opcional flip da latest run para FAILED, `make_escalator` curried adapter compatível com Executor.Escalator. 16 tests cobrindo every-kind hint, payload canonical+truncate, JSONL append/parent-mkdir, escalate happy/no-run/already-failed, make_escalator wiring, default path pinned.
-- ⚪ **F4.13** — `feat(F4): structlog JSON sink for logs/agent.jsonl` (`src/pipeline/agent/_logging.py` + clock injetável). Tests: `tests/unit/test_agent_logging.py` com clock mockado valida log byte-idêntico.
+- ✅ **F4.13** — `feat(F4): structlog JSON sink for logs/agent.jsonl`. `src/pipeline/agent/_logging.py` com `AgentEventLogger` (jsonl append + structlog stdout parallel), `Clock` protocol, `default_clock`/`fixed_clock` helpers, `CANONICAL_EVENTS` table (9 events: loop_started/iteration/stopped, batch_started, layer_started/completed, failure_detected, fix_applied, escalation). 11 tests cobrindo canonical events, jsonl append/order, return payload, lazy parent mkdir, byte-stable replay com fixed clock, stdout sync, default clock UTC-aware, default path pinned.
 
 ## Loop + CLI
 
