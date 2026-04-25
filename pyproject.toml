@@ -12,7 +12,7 @@ dependencies = [
     "pyarrow>=16.0",
     "anthropic>=0.34",
     "pydantic>=2.7",
-    "pydantic-settings>=2.3",
+    "pydantic-settings>=2.6",
     "structlog>=24.1",
     "click>=8.1",
 ]
