@@ -311,6 +311,37 @@ def test_cli_gold_rejects_path_traversal_in_gold_root(
     assert "'..' segments are not allowed in --gold-root" in result.output
 
 
+def test_cli_gold_rejects_symlink_escape_in_gold_root(
+    tiny_source_parquet: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_safe_resolve`` must reject any --gold-root whose resolution
+    follows a symlink. Otherwise an attacker who plants a symlink could
+    redirect Gold writes outside the declared root.
+    """
+    _configure_env(tmp_path, monkeypatch)
+    batch_id, silver_root, _ = _run_ingest_and_silver(tmp_path, tiny_source_parquet)
+    real_target = tmp_path / "real_target"
+    real_target.mkdir()
+    symlink_root = tmp_path / "gold_symlink"
+    symlink_root.symlink_to(real_target, target_is_directory=True)
+    runner = CliRunner()
+    result = runner.invoke(
+        gold,
+        [
+            "--batch-id",
+            batch_id,
+            "--silver-root",
+            str(silver_root),
+            "--gold-root",
+            str(symlink_root),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "symlink resolution detected in --gold-root" in result.output
+
+
 # --------------------------------------------------------------- populated persona
 
 

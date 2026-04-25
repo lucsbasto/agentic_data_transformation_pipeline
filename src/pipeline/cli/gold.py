@@ -110,7 +110,18 @@ def gold(batch_id: str, silver_root: Path, gold_root: Path) -> None:
 def _safe_resolve(path: Path, *, flag: str) -> Path:
     if any(part == ".." for part in path.parts):
         raise click.ClickException(f"'..' segments are not allowed in {flag}: {path!s}")
-    return path.resolve()
+    resolved = path.resolve()
+    # Defense-in-depth vs symlink escape: ``Path.resolve()`` follows
+    # symlinks, so a planted symlink could redirect reads/writes outside
+    # the declared root. ``Path.absolute()`` does not follow symlinks —
+    # if they disagree, a symlink expanded somewhere in the chain.
+    declared = path.absolute()
+    if resolved != declared:
+        raise click.ClickException(
+            f"symlink resolution detected in {flag}: {path!s} "
+            f"(declared {declared}, resolves to {resolved})"
+        )
+    return resolved
 
 
 def _validate_batch_id(batch_id: str) -> None:
