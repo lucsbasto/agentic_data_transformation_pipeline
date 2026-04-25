@@ -22,6 +22,11 @@ def temp_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ``state/`` and ``logs/`` paths don't bleed between tests."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data" / "raw").mkdir(parents=True)
+    # `Settings.load()` requires an ANTHROPIC_API_KEY + lead secret
+    # even when the CLI default classifier disables stage-2 LLM
+    # calls — pin fakes (mirrors the F2/F3 CLI test fixtures).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("PIPELINE_LEAD_SECRET", "test-lead-secret-0123456789abcdef")
     return tmp_path
 
 

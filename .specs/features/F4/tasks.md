@@ -83,15 +83,15 @@ Open items consolidated from `REVIEWS/code-reviewer.md`, `REVIEWS/security-revie
 | design-§1 | critic | Update design.md §1 to remove phantom `state.py` (CRUD lives in `ManifestDB`). |
 | docs-budget | critic | Update `docs/agent-flow.md` §4 once budget semantics decision lands. |
 
-### Real wiring (deferred from F4 by design)
+### Real wiring
 
-| ID | Item |
-|---|---|
-| WIRING-1 | Replace `_empty_runners` placeholder with adapters calling `pipeline.bronze.ingest.run` / `pipeline.silver.transform.run` / `pipeline.gold.transform.run`. |
-| WIRING-2 | Replace `_default_build_fix` placeholder with per-kind dispatcher mapping each `ErrorKind` to the corresponding `pipeline.agent.fixes.<kind>.build_fix(...)` factory. |
-| WIRING-3 | Wire F2 PII regex callers (`_EMAIL_RE`, `_CPF_RE`, `_PHONE_RE`, etc.) to consult `pipeline.silver.regex.load_override` before falling back to compiled defaults. |
-| WIRING-4 | Add `had_quarantine` column to `runs` (DDL + migration) and have the out_of_range fix flip it on the latest run row in addition to the `agent_failures.last_fix_kind` ack. |
-| F4.20 | Run smoke after WIRING-1/-2 land; record cold/warm timing in `.specs/features/F4/SMOKE.md`. |
+| ID | Status | Item |
+|---|---|---|
+| WIRING-1 | ✅ shipped | Runner adapters in `src/pipeline/agent/runners.py::make_runners_for` invoke `_run_ingest` / `_run_silver` / `_run_gold` for each layer per batch. CLI `pipeline agent run-once` now drives real Bronze→Silver→Gold. |
+| WIRING-2 | ✅ partial | `make_fix_builder` dispatches `SCHEMA_DRIFT` / `PARTITION_MISSING` / `OUT_OF_RANGE` to their fix modules. `REGEX_BREAK` still returns `None` because the executor's exception context does not carry sample messages + baseline (separate harvesting task). |
+| WIRING-3 | ⚪ open | Wire F2 PII regex callers (`_EMAIL_RE`, `_CPF_RE`, `_PHONE_RE`, etc.) to consult `pipeline.silver.regex.load_override` before falling back to compiled defaults. |
+| WIRING-4 | ⚪ open | Add `had_quarantine` column to `runs` (DDL + migration) and have the out_of_range fix flip it on the latest run row in addition to the `agent_failures.last_fix_kind` ack. |
+| F4.20 | ⚪ unblocked | Run smoke now that WIRING-1/-2 are in place; record cold/warm timing in `.specs/features/F4/SMOKE.md`. |
 
 ---
 

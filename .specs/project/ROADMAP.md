@@ -2,8 +2,8 @@
 
 ## Estado atual
 
-- Fase: **M3 em curso — F4 backbone shipped, runner wiring + F5 pendentes**
-- Próximo passo: WIRING-1/-2 (real F1/F2/F3 runner adapters + per-kind fix dispatcher no `pipeline.cli.agent`) seguido de F4.20 smoke + F5 (CLI watch + observabilidade pública).
+- Fase: **M3 em curso — F4 funcional (backbone + WIRING-1/-2 shipped); F5 + smoke pendentes**
+- Próximo passo: rodar F4.20 smoke (`pipeline agent run-once` end-to-end no fixture 153k) e anotar tempo em `.specs/features/F4/SMOKE.md`. Depois F5 (CLI watch + observabilidade pública). WIRING-3/-4 (F2 regex hookup + `had_quarantine`) ficam para o backlog M4.
 
 ## Milestones
 
@@ -44,10 +44,10 @@ Orquestrador e CLI. Pipeline vira pipeline vivo.
 
 | Feature | Status | Deps | Tamanho |
 |---|---|---|---|
-| **F4 — Agent core (loop + auto-correção)** | 🟢 backbone shipped (2026-04-25) | F1 | Complex |
-| **F5 — Observability + CLI** | ⚪ blocked | F4 wiring | Medium |
+| **F4 — Agent core (loop + auto-correção)** | 🟢 funcional (2026-04-25) | F1 | Complex |
+| **F5 — Observability + CLI** | ⚪ blocked | F4.20 smoke + F5 design | Medium |
 
-**Status da entrega F4 (parcial):** F4.0..F4.19 + F4.21 + F4.22 + F4.23 shipped; F4.20 (smoke 153k) deferido até real runner wiring landar. 866 testes verdes + 1 documented skip, ruff + mypy strict limpos. Lane de review 3-agent (`.specs/features/F4/REVIEWS/`): 0 critical não-resolvidos; 2 HIGH (`SIGINT→INTERRUPTED`, executor `_require_conn` leak) fechados em 846cbca; 8 MED + 8 LOW backlog em `.specs/features/F4/tasks.md` "F4 Follow-ups backlog". Runner wiring (`_empty_runners`/`_default_build_fix` placeholders → real F1/F2/F3 adapters + per-kind fix dispatcher) bloqueia M3 fechar de fato.
+**Status da entrega F4:** F4.0..F4.19 + F4.21 + F4.22 + F4.23 shipped; WIRING-1 (`make_runners_for`) + WIRING-2 (`make_fix_builder`) wired no `pipeline.cli.agent`. `pipeline agent run-once` agora dispara `_run_ingest` / `_run_silver` / `_run_gold` reais e o dispatcher mapeia `SCHEMA_DRIFT` / `PARTITION_MISSING` / `OUT_OF_RANGE` aos seus fix modules. `REGEX_BREAK` ainda escala (precisa harvesting de samples + baseline). 879 testes verdes + 1 documented skip, ruff + mypy strict limpos. Lane de review 3-agent (`.specs/features/F4/REVIEWS/`): 0 critical não-resolvidos; 2 HIGH (`SIGINT→INTERRUPTED`, executor `_require_conn` leak) fechados em 846cbca; 8 MED + 8 LOW backlog em `.specs/features/F4/tasks.md`.
 
 **Critério de fim do M3:** `python -m pipeline watch` mantém pipeline vivo. Injeção de falha sintética dispara ciclo diagnose→fix→retry→escalate documentado em log estruturado.
 
