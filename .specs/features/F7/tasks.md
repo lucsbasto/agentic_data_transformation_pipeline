@@ -19,7 +19,7 @@
 ## Container + runtime (2.x)
 
 - ✅ **F7.5** — `feat(F7): multi-stage Dockerfile (uv + non-root)`. Shipped 095afb4 — builder/runtime stages, non-root uid 10001, HEALTHCHECK, .dockerignore; `docker build --check` clean. Stage 1 `uv sync --frozen --no-dev` em `/app/.venv`. Stage 2 `python:3.12-slim` copia venv + src; non-root user `pipeline:pipeline` (uid 10001); HEALTHCHECK roda `pipeline agent --help`; ENTRYPOINT `["python","-m","pipeline"]`. `.dockerignore` exclui `data/`, `logs/`, `.venv/`, `__pycache__`. Tests: `docker build` smoke em CI lane (deferred to F7.19).
-- ⚪ **F7.6** — `feat(F7): docker-compose.yml for local prod-mode`. Service `agent` rodando `agent run-forever`; volumes nomeados `pipeline-data` `pipeline-logs` `pipeline-state`; `env_file: .env`; `restart: unless-stopped`; healthcheck `CMD pipeline agent --help`. Sem deps externos (Prometheus/Grafana entram em F7.13).
+- ✅ **F7.6** — `feat(F7): docker-compose.yml for local prod-mode`. Shipped 60d7d7a — `compose.yaml` na raiz: service `agent` (build Dockerfile, image `pipeline:latest`), `env_file: .env`, command `["agent","run-forever"]`, volumes nomeados `pipeline-data`/`pipeline-logs`/`pipeline-state`, `restart: unless-stopped`, healthcheck CMD `python -m pipeline agent --help`. `docker compose config -q` exit 0.
 - ⚪ **F7.7** — `feat(F7): graceful shutdown wires SIGTERM → INTERRUPTED`. `pipeline.agent.loop.run_forever` instala signal handler (SIGTERM + SIGINT) que set `stop_event` + flag in-progress run para `INTERRUPTED` (já existe em F4.22 fix; F7.7 expande para SIGTERM e garante manifest update antes de `sys.exit(0)`). Tests: subprocess send SIGTERM mid-loop → exit 0 + manifest row INTERRUPTED.
 
 ## Healthchecks + métricas Prometheus (3.x)
