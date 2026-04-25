@@ -523,8 +523,10 @@ def test_two_runs_produce_byte_identical_parquet(tmp_path: Path) -> None:
 
 
 def test_two_runs_produce_equal_insights_modulo_envelope(tmp_path: Path) -> None:
-    """The deterministic insights (everything except generated_at /
-    timestamps) must be byte-identical across runs."""
+    """Insights payload — including ``generated_at`` — must be
+    byte-identical across runs, since ``generated_at`` is anchored to
+    ``batch_latest_timestamp`` (Silver-derived) rather than wall-clock.
+    """
     rows = _two_lead_silver_rows()
     classifier_a, _ = _persona_classifier_factory()
     first = transform_gold(
@@ -542,10 +544,8 @@ def test_two_runs_produce_equal_insights_modulo_envelope(tmp_path: Path) -> None
     )
     payload_a = json.loads(first.insights_path.read_text(encoding="utf-8"))
     payload_b = json.loads(second.insights_path.read_text(encoding="utf-8"))
-    # Strip the wall-clock envelope before comparison.
-    payload_a.pop("generated_at", None)
-    payload_b.pop("generated_at", None)
     assert payload_a == payload_b
+    assert payload_a["generated_at"] == payload_b["generated_at"]
 
 
 # ---------------------------------------------------------------------------

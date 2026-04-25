@@ -197,7 +197,7 @@ def transform_gold(
 
     insights_payload = build_insights(silver_lf, lead_profile_df.lazy())
     insights_payload = {
-        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "generated_at": batch_latest.isoformat(),
         "batch_id": batch_id,
         **insights_payload,
     }
