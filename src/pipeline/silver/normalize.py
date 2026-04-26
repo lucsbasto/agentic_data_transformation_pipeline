@@ -42,6 +42,8 @@ import json
 #     ``"".join(...)`` of the non-combining characters gives us an
 #     accent-free copy of the string.
 import unicodedata
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -165,3 +167,51 @@ def normalize_name_expr(expr: pl.Expr) -> pl.Expr:
         return_dtype=pl.String,
         skip_nulls=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Perf-bench factory — used by ``pipeline/perf/scenarios/*`` to time the
+# Silver lane in isolation from the agent loop. Lazy import of CLI
+# helpers keeps this module importable without a Settings instance.
+# ---------------------------------------------------------------------------
+
+
+def build_silver_runner(
+    *,
+    bronze_root: Path | None = None,
+    silver_root: Path | None = None,
+    settings: object | None = None,
+    cache_path: Path | None = None,
+) -> Callable[[str], None]:
+    """Return ``runner(batch_id)`` that runs Silver for one batch.
+
+    Defaults pull paths from :mod:`pipeline.paths` and a fresh
+    :class:`pipeline.settings.Settings.load`, so perf scenarios can
+    call ``build_silver_runner()`` with no arguments. ``cache_path``
+    is accepted but ignored at the runner level — warm-cache
+    scenarios use it to pre-populate the LLM cache file before the
+    timed run, which the runner already reads via
+    :class:`pipeline.llm.cache.LLMCache`.
+    """
+    del cache_path  # accepted for warm-cache scenarios; cache lives elsewhere
+
+    from uuid import uuid4  # noqa: PLC0415
+
+    from pipeline.cli.silver import _run_silver  # noqa: PLC0415
+    from pipeline.paths import data_bronze_dir, data_silver_dir  # noqa: PLC0415
+    from pipeline.settings import Settings  # noqa: PLC0415
+
+    resolved_settings = settings if isinstance(settings, Settings) else Settings.load()
+    resolved_bronze: Path = bronze_root or data_bronze_dir()
+    resolved_silver: Path = silver_root or data_silver_dir()
+
+    def _run(batch_id: str) -> None:
+        _run_silver(
+            run_id=uuid4().hex,
+            batch_id=batch_id,
+            bronze_root=resolved_bronze,
+            silver_root=resolved_silver,
+            settings=resolved_settings,
+        )
+
+    return _run

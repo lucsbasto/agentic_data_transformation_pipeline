@@ -71,6 +71,7 @@ from pipeline.settings import Settings
 __all__ = [
     "GoldTransformResult",
     "PersonaClassifier",
+    "build_gold_runner",
     "transform_gold",
 ]
 
@@ -517,6 +518,48 @@ def _default_persona_classifier(settings: Settings | None) -> PersonaClassifier:
                 budget=budget,
                 batch_latest_timestamp=batch_latest_timestamp,
             )
+        )
+
+    return _run
+
+
+# ---------------------------------------------------------------------------
+# Perf-bench factory — used by ``pipeline/perf/scenarios/*`` to time the
+# Gold lane in isolation from the agent loop. Lazy import of CLI helpers
+# keeps this module importable without a Settings instance.
+# ---------------------------------------------------------------------------
+
+
+def build_gold_runner(
+    *,
+    silver_root: Path | None = None,
+    gold_root: Path | None = None,
+    settings: Settings | None = None,
+) -> Callable[[str], None]:
+    """Return ``runner(batch_id)`` that runs Gold for one batch.
+
+    Defaults pull paths from :mod:`pipeline.paths` and a fresh
+    :class:`pipeline.settings.Settings.load`, so perf scenarios can
+    call ``build_gold_runner()`` with no arguments. Each call mints
+    a fresh ``run_id`` so retries land in their own ``runs`` row,
+    mirroring the agent-loop runner.
+    """
+    from uuid import uuid4  # noqa: PLC0415
+
+    from pipeline.cli.gold import _run_gold  # noqa: PLC0415
+    from pipeline.paths import data_gold_dir, data_silver_dir  # noqa: PLC0415
+
+    resolved_settings = settings or Settings.load()
+    resolved_silver: Path = silver_root or data_silver_dir()
+    resolved_gold: Path = gold_root or data_gold_dir()
+
+    def _run(batch_id: str) -> None:
+        _run_gold(
+            run_id=uuid4().hex,
+            batch_id=batch_id,
+            silver_root=resolved_silver,
+            gold_root=resolved_gold,
+            settings=resolved_settings,
         )
 
     return _run
