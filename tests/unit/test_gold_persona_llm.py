@@ -191,14 +191,19 @@ def test_rule_hit_skips_the_llm_entirely() -> None:
 
 
 def test_llm_path_parses_valid_reply() -> None:
+    """F5 combined prompt: LLM returns JSON with persona + sentimento."""
     agg = _agg()  # no rule hits
-    client = _FakeLLMClient(responses=[_llm_response("indeciso")])
+    client = _FakeLLMClient(
+        responses=[_llm_response('{"persona": "indeciso", "sentimento": "neutro"}')]
+    )
     result = classify_with_overrides(
         agg, batch_latest_timestamp=_ts(0), client=client  # type: ignore[arg-type]
     )
     assert result.persona == "indeciso"
     assert result.persona_source == "llm"
     assert result.persona_confidence == 0.8
+    assert result.sentiment == "neutro"
+    assert result.sentiment_source == "llm"
     assert len(client.calls) == 1
 
 
@@ -206,7 +211,11 @@ def test_llm_invalid_reply_falls_back_to_comprador_racional_with_distinct_source
     """Invalid reply → fallback to ``comprador_racional`` with
     ``persona_source='llm_fallback'`` — distinct from a real
     ``persona_source='llm'`` ``comprador_racional`` so auditors can
-    separate model-said from parser-fell-back rows."""
+    separate model-said from parser-fell-back rows.
+
+    F5: invalid JSON loses both labels. Sentiment also falls back
+    to ``neutro`` with ``llm_fallback`` source.
+    """
     agg = _agg()
     client = _FakeLLMClient(responses=[_llm_response("não sei, talvez indeciso")])
     result = classify_with_overrides(
@@ -215,13 +224,14 @@ def test_llm_invalid_reply_falls_back_to_comprador_racional_with_distinct_source
     assert result.persona == "comprador_racional"
     assert result.persona_source == "llm_fallback"
     assert result.persona_confidence == 0.8
+    assert result.sentiment == "neutro"
+    assert result.sentiment_source == "llm_fallback"
 
 
 def test_multi_line_reply_is_rejected_as_invalid() -> None:
-    """``parse_persona_reply`` does NOT grab the first line — a
-    multi-line reply like ``"indeciso\\nporque..."`` falls to the
-    fallback path. Locks current strictness so a future
-    "helpfulness" tweak cannot silently loosen the contract."""
+    """A multi-line non-JSON reply falls to the fallback path on
+    both labels. Locks current strictness so a future "helpfulness"
+    tweak cannot silently loosen the contract."""
     agg = _agg()
     client = _FakeLLMClient(
         responses=[_llm_response("indeciso\nporque o lead volta e volta")]
@@ -231,6 +241,8 @@ def test_multi_line_reply_is_rejected_as_invalid() -> None:
     )
     assert result.persona == "comprador_racional"
     assert result.persona_source == "llm_fallback"
+    assert result.sentiment == "neutro"
+    assert result.sentiment_source == "llm_fallback"
 
 
 def test_llm_call_error_returns_skipped_sentinel() -> None:

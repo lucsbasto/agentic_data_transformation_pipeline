@@ -119,6 +119,8 @@ def test_lead_profile_schema_columns_in_declared_order() -> None:
         "engagement_profile",
         "persona",
         "persona_confidence",
+        "sentiment",
+        "sentiment_confidence",
         "price_sensitivity",
         "intent_score",
         "first_seen_at",

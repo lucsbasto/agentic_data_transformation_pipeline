@@ -114,9 +114,15 @@ def _install_fakes(monkeypatch: pytest.MonkeyPatch, client_factory: Any) -> None
     monkeypatch.setattr(mod, "LLMClient", client_factory)
 
 
-def _response(text: str = "indeciso", *, cache_hit: bool = False) -> LLMResponse:
+def _response(
+    persona: str = "indeciso",
+    *,
+    sentimento: str = "neutro",
+    cache_hit: bool = False,
+) -> LLMResponse:
+    """Build the F5 combined-prompt JSON reply."""
     return LLMResponse(
-        text=text,
+        text=f'{{"persona": "{persona}", "sentimento": "{sentimento}"}}',
         model="stub",
         input_tokens=0,
         output_tokens=0,

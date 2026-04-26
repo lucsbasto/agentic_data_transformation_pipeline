@@ -588,3 +588,70 @@ def test_persona_distribution_buckets_null_under_sentinel() -> None:
     assert dist == {"comprador_rapido": 1, "indeciso": 1, "_unclassified": 2}
     assert all(isinstance(k, str) for k in dist)
     json.dumps(dist, sort_keys=True)
+
+
+def test_sentiment_columns_populated_end_to_end(tmp_path: Path) -> None:
+    """F5 — classifier returns sentiment + sentiment_confidence; the
+    written lead_profile parquet exposes both columns with the correct
+    enum dtype + values."""
+
+    def _classifier(
+        aggs: list[LeadAggregate], batch_latest_timestamp: datetime
+    ) -> dict[str, PersonaResult]:
+        # L1 → positivo (high confidence rule-style); L2 → misto (LLM).
+        mapping = {
+            "L1": ("positivo", 1.0, "rule"),
+            "L2": ("misto", 0.8, "llm"),
+        }
+        return {
+            agg.lead_id: PersonaResult(
+                persona="comprador_racional",
+                persona_confidence=0.8,
+                persona_source="llm",
+                sentiment=mapping[agg.lead_id][0],
+                sentiment_confidence=mapping[agg.lead_id][1],
+                sentiment_source=mapping[agg.lead_id][2],
+            )
+            for agg in aggs
+        }
+
+    result = transform_gold(
+        _silver_lf(_two_lead_silver_rows()),
+        batch_id="bid-f5",
+        gold_root=tmp_path,
+        persona_classifier=_classifier,
+    )
+    lp = pl.read_parquet(result.lead_profile_path)
+    assert "sentiment" in lp.columns
+    assert "sentiment_confidence" in lp.columns
+    # Schema must validate against GOLD_LEAD_PROFILE_SCHEMA — the
+    # writer's drift assertion fails closed if the columns or dtypes
+    # do not line up with _LEAD_PROFILE_FIELDS.
+    assert lp.schema == GOLD_LEAD_PROFILE_SCHEMA
+    by_lead = {row["lead_id"]: row for row in lp.iter_rows(named=True)}
+    assert by_lead["L1"]["sentiment"] == "positivo"
+    assert by_lead["L1"]["sentiment_confidence"] == 1.0
+    assert by_lead["L2"]["sentiment"] == "misto"
+    assert by_lead["L2"]["sentiment_confidence"] == 0.8
+
+
+def test_sentiment_skipped_classifier_yields_null_columns(tmp_path: Path) -> None:
+    """F5 — when the classifier returns ``PersonaResult.skipped()``
+    for every lead, both sentiment columns land as null but the
+    schema still validates."""
+
+    def _classifier(
+        aggs: list[LeadAggregate], batch_latest_timestamp: datetime
+    ) -> dict[str, PersonaResult]:
+        return {agg.lead_id: PersonaResult.skipped() for agg in aggs}
+
+    result = transform_gold(
+        _silver_lf(_two_lead_silver_rows()),
+        batch_id="bid-f5-skip",
+        gold_root=tmp_path,
+        persona_classifier=_classifier,
+    )
+    lp = pl.read_parquet(result.lead_profile_path)
+    assert lp.schema == GOLD_LEAD_PROFILE_SCHEMA
+    assert lp["sentiment"].is_null().all()
+    assert lp["sentiment_confidence"].is_null().all()
