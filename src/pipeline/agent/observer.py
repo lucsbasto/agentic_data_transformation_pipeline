@@ -73,6 +73,8 @@ def _is_stale(
 
 def is_pending(
     row: BatchRow | None,
+    batch_id: str = "",
+    required_roots: list[Path] | None = None,
     *,
     now: datetime,
     stale_after: timedelta,
@@ -80,22 +82,41 @@ def is_pending(
     """Decide whether a single ``batches`` row needs work.
 
     Pending iff: missing entirely, terminal-failed, or
-    stale-in-progress (crash debris). A live ``IN_PROGRESS`` row
-    means another process is actively driving the batch — leave it
-    alone.
+    stale-in-progress (crash debris).
+
+    Self-healing (F4): when ``required_roots`` is non-empty, also flag
+    a ``COMPLETED`` row as pending if any expected layer parquet is
+    missing on disk. Callers that do not need this check (older tests,
+    perf scenarios) pass an empty list / omit the kwarg and the row's
+    status alone decides.
     """
     if row is None:
         return True
+
     if row.status == BATCH_STATUS_FAILED:
         return True
-    if row.status == BATCH_STATUS_COMPLETED:
-        return False
-    return _is_stale(row, now=now, stale_after=stale_after)
 
+    if row.status == BATCH_STATUS_COMPLETED and required_roots:
+        for root in required_roots:
+            # Monta o caminho padrão: root / batch_id=xxx / part-0.parquet
+            expected_file = root / f"batch_id={batch_id}" / "part-0.parquet"
+            if not expected_file.exists():
+                _LOG.warning(
+                    "agent.observer.healing",
+                    batch_id=batch_id,
+                    layer_root=root.name,
+                    reason="physical_file_missing"
+                )
+                return True
+        return False
+
+    return _is_stale(row, now=now, stale_after=stale_after)
 
 def scan(
     manifest: ManifestDB,
     source_root: Path,
+    silver_root: Path | None = None,
+    gold_root: Path | None = None,
     *,
     now: datetime | None = None,
     stale_after_s: float = DEFAULT_STALE_AFTER_S,
@@ -112,6 +133,10 @@ def scan(
     source_root:
         Directory containing the raw parquet files. One parquet =
         one prospective batch.
+    silver_root:
+        Directory for silver layer partitions to verify physical existence.
+    gold_root:
+        Directory for gold layer partitions to verify physical existence.
     now:
         Injectable wall-clock for deterministic tests. Defaults to
         ``datetime.now(tz=UTC)``.
@@ -122,15 +147,27 @@ def scan(
     wall = now or datetime.now(tz=UTC)
     stale_after = timedelta(seconds=stale_after_s)
     pending: list[str] = []
+
+    required_roots = [r for r in (silver_root, gold_root) if r is not None]
+
     for batch_id, path in discover_source_batches(source_root):
         row = manifest.get_batch(batch_id)
-        if is_pending(row, now=wall, stale_after=stale_after):
+
+        # Chamada atualizada passando o ID e as raízes para validação física
+        if is_pending(row, batch_id, required_roots, now=wall, stale_after=stale_after):
             pending.append(batch_id)
+
+            # Determina a razão para o log (se é healing ou status do banco)
+            reason = "missing" if row is None else row.status
+            if row and row.status == BATCH_STATUS_COMPLETED:
+                reason = "self_healing_missing_files"
+
             _LOG.debug(
                 "agent.observer.pending",
                 batch_id=batch_id,
                 source=str(path),
-                reason=("missing" if row is None else row.status),
+                reason=reason,
             )
+
     pending.sort()
     return pending

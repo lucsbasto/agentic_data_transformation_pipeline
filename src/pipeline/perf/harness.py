@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import pkgutil
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
@@ -28,6 +29,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, TracebackType
 from typing import IO, Protocol, runtime_checkable
+
+_LOG = logging.getLogger(__name__)
 
 
 def now_utc() -> str:
@@ -129,7 +132,18 @@ def discover_scenarios(
 
     registry: dict[str, Scenario] = {}
     for module_info in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
-        module = importlib.import_module(module_info.name)
+        try:
+            module = importlib.import_module(module_info.name)
+        except ImportError as exc:
+            # WIP scenario modules sometimes reference helpers that have
+            # not landed yet. Skip them with a warning so a partially-
+            # broken module never breaks discovery for shipped scenarios.
+            _LOG.warning(
+                "perf.scenario_skipped_due_to_import_error module=%s error=%s",
+                module_info.name,
+                exc,
+            )
+            continue
         scenario = getattr(module, "SCENARIO", None)
         if scenario is None:
             continue

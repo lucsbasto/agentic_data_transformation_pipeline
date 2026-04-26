@@ -60,6 +60,8 @@ def run_once(
     *,
     manifest: ManifestDB,
     source_root: Path,
+    silver_root: Path | None = None,  # F4 self-heal — None disables physical check
+    gold_root: Path | None = None,    # F4 self-heal — None disables physical check
     runners_for: RunnersFor,
     classify: Classifier,
     build_fix: FixBuilder,
@@ -86,7 +88,13 @@ def run_once(
     status = RunStatus.COMPLETED
 
     try:
-        pending = scan(manifest, source_root)
+        # F4: Observer now validates physical existence across silver/gold roots
+        pending = scan(
+            manifest=manifest,
+            source_root=source_root,
+            silver_root=silver_root,
+            gold_root=gold_root
+        )
         logger.event(EVENT_LOOP_ITERATION, pending_count=len(pending))
 
         executor = Executor(
@@ -130,9 +138,7 @@ def run_once(
                 continue
     except KeyboardInterrupt:
         # Spec F4-RF-09: SIGINT / Ctrl-C must seal the agent_run row
-        # as INTERRUPTED so the next iteration can pick up cleanly,
-        # rather than masquerading as a hard FAILED that would
-        # trigger a retry of work the operator explicitly cancelled.
+        # as INTERRUPTED so the next iteration can pick up cleanly.
         status = RunStatus.INTERRUPTED
         raise
     except BaseException:
@@ -169,6 +175,8 @@ def run_forever(
     *,
     manifest: ManifestDB,
     source_root: Path,
+    silver_root: Path | None = None,  # F4 self-heal propagated to run_once
+    gold_root: Path | None = None,    # F4 self-heal propagated to run_once
     runners_for: RunnersFor,
     classify: Classifier,
     build_fix: FixBuilder,
@@ -183,15 +191,10 @@ def run_forever(
     """Run :func:`run_once` repeatedly, sleeping ``interval`` seconds
     between iterations.
 
-    The sleep is implemented via :meth:`threading.Event.wait` so a
-    SIGINT / SIGTERM handler can call ``stop_event.set()`` to wake
-    the loop instantly instead of waiting out the remaining
-    interval (design §17 O3).
-
-    ``max_iters`` caps the loop count for tests; ``None`` (default)
-    runs until ``stop_event`` is set or KeyboardInterrupt fires.
-    Returns the list of :class:`AgentResult` values for every
-    iteration that completed (not crashed).
+    Why: production deployments need a daemon loop; ``max_iters`` and
+    ``stop_event`` exist for integration tests that need a bounded run
+    without a real sleep. The lock is shared across iterations so
+    concurrent invocations are still rejected (spec §7 D5).
     """
     cancel = stop_event or threading.Event()
     results: list[AgentResult] = []
@@ -202,6 +205,8 @@ def run_forever(
         result = run_once(
             manifest=manifest,
             source_root=source_root,
+            silver_root=silver_root,
+            gold_root=gold_root,
             runners_for=runners_for,
             classify=classify,
             build_fix=build_fix,
@@ -212,13 +217,8 @@ def run_forever(
         )
         results.append(result)
         iteration += 1
-        # Don't sleep after the last iteration when ``max_iters`` is
-        # set — keeps tests snappy AND avoids a delay in the natural
-        # ``cancel.set()`` path.
         if max_iters is not None and iteration >= max_iters:
             break
-        # ``Event.wait`` returns True if the event was set during the
-        # wait — that is our cancellation signal.
         if cancel.wait(interval):
             break
     return results

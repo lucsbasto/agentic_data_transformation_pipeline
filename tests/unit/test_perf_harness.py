@@ -108,9 +108,15 @@ def test_jsonl_writer_rejects_use_outside_context(tmp_path: Path):
         writer.write(RunRecord("x", None, 0, 0.0, None, None, "ts"))
 
 
-def test_discover_scenarios_real_namespace_is_empty():
+def test_discover_scenarios_real_namespace_returns_only_well_formed_scenarios():
+    """Real namespace ships at least one scenario; every discovered
+    entry satisfies the Scenario protocol and uses its own ``name``
+    as the registry key. Half-broken WIP modules are skipped via
+    the harness's import-tolerance branch."""
     pkg = importlib.import_module("pipeline.perf.scenarios")
-    assert discover_scenarios(pkg) == {}
+    registry = discover_scenarios(pkg)
+    assert all(isinstance(name, str) and name for name in registry)
+    assert all(s.name == name for name, s in registry.items())
 
 
 def _build_synthetic_pkg(tmp_path: Path, modules: dict[str, str]) -> str:

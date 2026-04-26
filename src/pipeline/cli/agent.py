@@ -178,7 +178,12 @@ def run_once_cmd(
     diagnose_budget: int,
     lock_path: Path,
 ) -> None:
-    """Run one iteration of the agent loop and exit."""
+    """Run one iteration of the agent loop and exit.
+
+    Assembles all collaborators (runners, classifier, escalator, lock), calls
+    :func:`pipeline.agent.loop.run_once`, prints a JSON summary to stdout, and
+    exits 0 on ``COMPLETED`` or 1 on any other status. (F4.16 / WIRING-1)
+    """
     _load_runtime_settings()  # F7.2: friendly-fail on missing DASHSCOPE_API_KEY
     settings = Settings.load()
     runners_for = make_runners_for(
@@ -197,6 +202,8 @@ def run_once_cmd(
         result = run_once(
             manifest=manifest,
             source_root=source_root,
+            silver_root=silver_root,
+            gold_root=gold_root,
             runners_for=runners_for,
             classify=_make_default_classifier(diagnose_budget),
             build_fix=build_fix,
@@ -236,7 +243,13 @@ def run_forever_cmd(
     interval: float,
     max_iters: int | None,
 ) -> None:
-    """Run the agent loop continuously."""
+    """Run the agent loop continuously until SIGINT or ``--max-iters`` is reached.
+
+    Wraps :func:`pipeline.agent.loop.run_forever`; each iteration is one
+    ``run-once`` cycle. Prints a JSON summary of iteration count and last
+    status on exit. Use ``--interval`` to tune the sleep between cycles and
+    ``--max-iters`` to cap runs in tests or demos. (F4.16 / WIRING-2)
+    """
     _load_runtime_settings()  # F7.2: friendly-fail on missing DASHSCOPE_API_KEY
     settings = Settings.load()
     runners_for = make_runners_for(
@@ -255,6 +268,8 @@ def run_forever_cmd(
         results = run_forever(
             manifest=manifest,
             source_root=source_root,
+            silver_root=silver_root,
+            gold_root=gold_root,
             runners_for=runners_for,
             classify=_make_default_classifier(diagnose_budget),
             build_fix=build_fix,
