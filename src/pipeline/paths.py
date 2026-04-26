@@ -55,20 +55,25 @@ def project_root() -> Path:
 
 
 def data_raw_dir() -> Path:
+    """Return the raw source drop zone (``data/raw/``)."""
     return project_root() / "data" / "raw"
 
 
 def data_bronze_dir() -> Path:
+    """Return the Bronze landing directory (``data/bronze/``)."""
     return project_root() / "data" / "bronze"
 
 
 def data_silver_dir() -> Path:
+    """Return the Silver output directory (``data/silver/``)."""
     return project_root() / "data" / "silver"
 
 
 def data_gold_dir() -> Path:
+    """Return the Gold output directory (``data/gold/``)."""
     return project_root() / "data" / "gold"
 
 
 def state_dir() -> Path:
+    """Return the state directory that holds ``manifest.db`` and lock files."""
     return project_root() / "state"

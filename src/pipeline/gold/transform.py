@@ -472,6 +472,11 @@ def _sentiment_telemetry(
 
 
 def _persona_distribution(lead_profile_df: pl.DataFrame) -> dict[str, int]:
+    """Return a ``{persona_label: count}`` histogram for structlog telemetry.
+
+    Null persona keys are bucketed under ``"_unclassified"`` so the dict is
+    safe to pass to structlog's JSON encoder (which rejects non-string keys).
+    """
     if lead_profile_df.height == 0:
         return {}
     counts = lead_profile_df.lazy().group_by("persona").agg(pl.len().alias("count")).collect()

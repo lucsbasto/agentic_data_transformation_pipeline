@@ -40,6 +40,7 @@ from pipeline.state.manifest import ManifestDB
 
 
 def _default_source() -> Path:
+    """Return the conventional raw parquet path used when ``--source`` is omitted."""
     return data_raw_dir() / "conversations_bronze.parquet"
 
 
@@ -140,6 +141,13 @@ def _run_ingest(
     bronze_root: Path,
     settings: Settings,
 ) -> None:
+    """Execute the scan → transform → write Bronze flow inside a manifest transaction.
+
+    Computes the batch identity, checks idempotency, opens the manifest,
+    drives the three-step Bronze pipeline, and records ``COMPLETED`` or
+    ``FAILED``. Extracted from :func:`ingest` to keep the Click callback
+    under the ruff ``PLR0915`` statement budget.
+    """
     logger = get_logger("pipeline.ingest")
     # LEARN: compute the deterministic batch id BEFORE opening the DB.
     # If the input file is broken (unreadable), we fail fast without
@@ -280,4 +288,5 @@ def _run_ingest(
 
 
 def _iso_now() -> str:
+    """Return the current UTC time as an ISO-8601 string for manifest timestamps."""
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

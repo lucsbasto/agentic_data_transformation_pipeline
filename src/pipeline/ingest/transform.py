@@ -143,6 +143,12 @@ __all__ = [
 def _schema_diff(
     actual: pl.Schema, expected: pl.Schema
 ) -> list[str]:
+    """Return human-readable diff lines between ``actual`` and ``expected`` schemas.
+
+    Reports missing columns, unexpected extra columns, and dtype mismatches
+    in a stable order so callers can embed the result in :class:`SchemaDriftError`
+    messages that are safe to assert on in tests.
+    """
     # LEARN: we build a plain ``list[str]`` and append to it. Simpler
     # than a generator when the result is modest in size and you want
     # to collect several kinds of diffs in one pass.

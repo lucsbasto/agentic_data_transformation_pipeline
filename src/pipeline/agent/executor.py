@@ -75,6 +75,11 @@ class Executor:
         escalate: Escalator,
         retry_budget: int = DEFAULT_RETRY_BUDGET,
     ) -> None:
+        """Wire the executor with its strategy collaborators.
+
+        All callables are injected rather than imported directly so
+        unit tests can drive the full recovery loop with stubs, without
+        spinning up the real LLM client or filesystem fix modules."""
         self._manifest = manifest
         self._agent_run_id = agent_run_id
         self._classify = classify
@@ -209,6 +214,9 @@ class Executor:
         layer: Layer,
         batch_id: str,
     ) -> None:
+        """Flip ``escalated=1`` on the failure row then invoke the
+        escalator. Marking happens first so a crash inside the escalator
+        does not leave the row un-flagged in the manifest."""
         if failure_id is not None:
             self._manifest.mark_agent_failure_escalated(failure_id)
         self._escalate(exc, kind, layer, batch_id)

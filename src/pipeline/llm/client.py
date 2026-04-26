@@ -155,6 +155,7 @@ class LLMClient:
 
     @property
     def settings(self) -> Settings:
+        """Expose the injected :class:`Settings` instance for read-only inspection."""
         return self._settings
 
     # LEARN: ``@staticmethod`` is a pure function attached to the class
@@ -162,6 +163,7 @@ class LLMClient:
     # conceptually with the class but does not need any of its state.
     @staticmethod
     def _build_anthropic(settings: Settings) -> Anthropic:
+        """Construct the real Anthropic SDK client pointed at the DashScope endpoint."""
         # LEARN: ``SecretStr.get_secret_value()`` returns the plaintext
         # key. We only reach into it at this exact boundary so the
         # secret never leaks through ``repr(settings)`` or logs. The
@@ -272,6 +274,13 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
     ) -> LLMResponse:
+        """Try the primary model up to ``pipeline_retry_budget`` times, then fall back.
+
+        Retryable errors (rate-limit, connection, timeout) trigger exponential
+        backoff with jitter. Fatal errors (auth, bad request) raise immediately.
+        After the primary budget is exhausted, one final attempt runs on the
+        configured fallback model before raising :class:`LLMCallError`.
+        """
         # LEARN: the retry-budget idea is standard for provider-facing
         # code. ``pipeline_retry_budget = 3`` means we will try the
         # primary model up to 3 times before giving up on it. Each
@@ -370,6 +379,13 @@ class LLMClient:
         temperature: float,
         attempt: int,
     ) -> LLMResponse:
+        """Execute a single SDK call and return a structured :class:`LLMResponse`.
+
+        Validates that the response contains at least one text block and that
+        its length stays within ``pipeline_llm_response_cap``. Raises
+        :class:`LLMCallError` on either violation so the caller can decide
+        whether to retry or propagate.
+        """
         # LEARN: ``time.monotonic`` measures wall time for latency; use
         # it for "how long did this call take" dashboards, never for
         # timestamps — a monotonic clock has no calendar meaning.

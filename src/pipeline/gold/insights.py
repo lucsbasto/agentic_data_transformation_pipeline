@@ -104,6 +104,12 @@ _OBJECTION_NOTES: Final[dict[str, str]] = {
 
 
 def build_ghosting_taxonomy(silver_lf: pl.LazyFrame) -> list[dict[str, Any]]:
+    """Count leads that never produced an outcome, bucketed by message volume.
+
+    Why buckets instead of raw counts: the spec (F3 design §8) asks for a
+    taxonomy so operators can distinguish short-ghost (1-2 msgs, likely spam
+    filter) from long-ghost (10+, genuine intent that faded).
+    """
     per_lead = (
         silver_lf.group_by("lead_id")
         .agg(
@@ -128,6 +134,8 @@ def _ghosting_bucket(
     counts: list[int],
     total_leads: int,
 ) -> dict[str, Any]:
+    """Build one bucket record: count of ghosted leads in [lo, hi] messages
+    and their rate over all leads in the batch."""
     bucket_count = sum(1 for c in counts if lo <= c <= hi)
     rate = bucket_count / total_leads if total_leads else 0.0
     return {
@@ -144,6 +152,10 @@ def _ghosting_bucket(
 
 
 def build_objections(silver_lf: pl.LazyFrame) -> list[dict[str, Any]]:
+    """One record per phrase in :data:`OBJECTION_PHRASES`: how many leads used
+    it and their close rate, so operators know which objections are genuine
+    blockers vs. negotiation theatre (F3 design §8).
+    """
     inbound = silver_lf.filter(pl.col("direction") == "inbound").collect()
     bodies = inbound["message_body_masked"].to_list()
     leads = inbound["lead_id"].to_list()
@@ -165,6 +177,11 @@ def _objection_record(
     leads: list[str],
     lead_outcome: dict[str, str | None],
 ) -> dict[str, Any]:
+    """Compute count + close_rate for a single objection phrase.
+
+    Close rate is ``None`` when no lead used the phrase — avoids a
+    misleading 0.0 that looks like "objection present, zero conversions".
+    """
     leads_with_phrase = {
         lead_id
         for lead_id, body in zip(leads, bodies, strict=True)
@@ -192,6 +209,12 @@ def _objection_record(
 
 
 def build_disengagement_moment(silver_lf: pl.LazyFrame) -> dict[str, Any]:
+    """Cross-tab where agents' last outbound message sat (positional index x
+    content type) for conversations that never reached an outcome.
+
+    Why: tells the sales team whether ghosting happens right after quoting
+    or deeper in the funnel, so they can refocus their scripts (F3 design §8).
+    """
     outbound = (
         silver_lf.filter(pl.col("direction") == "outbound")
         .sort(["conversation_id", "timestamp"])
@@ -229,6 +252,7 @@ def build_disengagement_moment(silver_lf: pl.LazyFrame) -> dict[str, Any]:
 
 
 def _index_bucket(idx: int) -> str:
+    """Map a 1-based outbound message index to a positional bucket label."""
     if idx <= _FIRST_INDEX_MAX:
         return "first"
     if idx <= _MID_INDEX_MAX:
@@ -237,6 +261,11 @@ def _index_bucket(idx: int) -> str:
 
 
 def _content_bucket(body: str | None) -> str:
+    """Classify an outbound message body into a content topic bucket.
+
+    First-match-wins over the phrase catalogues; bodies that match none fall
+    into ``"other"``.
+    """
     if matches_any(body, _QUOTE_PHRASES):
         return "after first quote"
     if matches_any(body, _PRICE_ASK_PHRASES):
@@ -292,6 +321,11 @@ def build_persona_outcome_correlation(
 
 
 def _matrix_with_rates(matrix_df: pl.DataFrame) -> list[dict[str, Any]]:
+    """Enrich the raw count crosstab with per-persona outcome rates.
+
+    Rate is computed within each persona so columns sum to 1.0 per persona —
+    not across the whole matrix — enabling fair cross-persona comparison.
+    """
     totals = matrix_df.group_by("persona").agg(pl.col("count").sum().alias("_persona_total"))
     enriched = (
         matrix_df.join(totals, on="persona", how="left")
@@ -303,6 +337,12 @@ def _matrix_with_rates(matrix_df: pl.DataFrame) -> list[dict[str, Any]]:
 
 
 def _default_top_surprise(matrix: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Deterministic fallback ranker: persona whose ``venda_fechada`` rate
+    deviates most from the overall batch close rate.
+
+    Used when no LLM ranker is injected; keeps unit tests free of the LLM
+    stack while still exercising the real surprise-detection logic (D9).
+    """
     closed_rows = [row for row in matrix if row["outcome"] == "venda_fechada"]
     if not closed_rows:
         return None
@@ -328,6 +368,14 @@ def build_insights(
     *,
     persona_outcome_ranker: Ranker | None = None,
 ) -> dict[str, Any]:
+    """Assemble the full ``summary.json`` payload (F3-RF-11).
+
+    Calls each insight builder and merges their outputs under the canonical
+    ``INSIGHT_KEYS``. Passes ``persona_outcome_ranker`` through to
+    :func:`build_persona_outcome_correlation` — ``None`` uses the
+    deterministic fallback so callers that skip the LLM still get a valid
+    payload.
+    """
     return {
         "determinism": dict(DETERMINISM_FLAGS),
         "ghosting_taxonomy": build_ghosting_taxonomy(silver_lf),

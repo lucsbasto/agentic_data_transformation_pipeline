@@ -357,6 +357,12 @@ def _call_and_parse(
 
 
 def _parse_response(text: str, *, body: str) -> ExtractedEntities:
+    """Parse raw LLM response text into :class:`ExtractedEntities`.
+
+    Validates JSON structure and required-field presence; returns
+    :meth:`ExtractedEntities.null` on any parse failure so the batch
+    never crashes on a malformed LLM response.
+    """
     logger = get_logger("pipeline.silver.llm")
     body_hash = _body_hash(body)
     body_len = len(body)
@@ -398,6 +404,11 @@ def _parse_response(text: str, *, body: str) -> ExtractedEntities:
 
 
 def _coerce_str(value: Any) -> str | None:
+    """Return ``value`` as a non-empty string, or ``None``.
+
+    Rejects non-strings and whitespace-only strings so a field the LLM
+    populated with ``""`` or ``"  "`` does not masquerade as a valid hit.
+    """
     if not isinstance(value, str):
         return None
     stripped = value.strip()
@@ -405,6 +416,12 @@ def _coerce_str(value: Any) -> str | None:
 
 
 def _coerce_int(value: Any) -> int | None:
+    """Coerce ``value`` to ``int`` if safely possible, else ``None``.
+
+    Rejects booleans (``True``/``False`` are ints in Python) and floats
+    that are not whole numbers to avoid accepting ``veiculo_ano: true``
+    as the year ``1``.
+    """
     # LEARN: ``isinstance(True, int)`` is ``True`` in Python — bool is a
     # subclass of int. Exclude it explicitly so the LLM returning
     # ``true`` for ``veiculo_ano`` does not become the year 1.
@@ -418,6 +435,11 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _coerce_float(value: Any) -> float | None:
+    """Coerce ``value`` to ``float`` if numeric, else ``None``.
+
+    Booleans are excluded for the same reason as in :func:`_coerce_int` —
+    ``true`` is not a valid BRL amount.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -426,4 +448,9 @@ def _coerce_float(value: Any) -> float | None:
 
 
 def _coerce_bool(value: Any) -> bool | None:
+    """Return ``value`` if it is a native ``bool``, else ``None``.
+
+    Rejects integers (0/1) so a numeric LLM response for ``sinistro_historico``
+    does not silently become ``False`` or ``True``.
+    """
     return value if isinstance(value, bool) else None

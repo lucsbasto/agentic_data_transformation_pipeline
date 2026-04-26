@@ -116,6 +116,8 @@ tests pass a fixed-value lambda so log output stays byte-stable."""
 
 
 def default_clock() -> datetime:
+    """Return the current UTC time. Named so it can be swapped out in
+    tests via the ``clock`` parameter without monkey-patching datetime."""
     return datetime.now(tz=UTC)
 
 
@@ -140,12 +142,17 @@ class AgentEventLogger:
         clock: Clock | None = None,
         stdout_logger: structlog.stdlib.BoundLogger | None = None,
     ) -> None:
+        """Wire the logger's sink and clock. All three parameters are
+        injectable so integration tests can capture output without
+        touching the real filesystem or wall clock."""
         self._log_path = log_path
         self._clock = clock or default_clock
         self._stdout = stdout_logger or structlog.get_logger("pipeline.agent")
 
     @property
     def log_path(self) -> Path:
+        """Absolute path of the JSONL sink. Exposed so tests can
+        assert on the file that was opened without hard-coding the default."""
         return self._log_path
 
     def event(self, name: str, **fields: Any) -> dict[str, Any]:

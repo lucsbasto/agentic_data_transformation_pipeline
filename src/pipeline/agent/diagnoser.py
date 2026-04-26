@@ -66,6 +66,12 @@ class _DiagnoseBudget:
     used: int = 0
 
     def consume(self) -> bool:
+        """Attempt to spend one LLM call from the budget.
+
+        Returns ``True`` and increments ``used`` when quota remains;
+        returns ``False`` (no increment) when already exhausted so
+        callers can gate the LLM call without a separate ``remaining``
+        check."""
         if self.used >= self.cap:
             return False
         self.used += 1
@@ -73,6 +79,8 @@ class _DiagnoseBudget:
 
     @property
     def remaining(self) -> int:
+        """Calls left before the budget is exhausted. Floored at 0 so
+        callers can log it without negative-value noise."""
         return max(self.cap - self.used, 0)
 
 

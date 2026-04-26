@@ -106,6 +106,7 @@ class LLMCache:
         self._conn: sqlite3.Connection | None = None
 
     def open(self) -> LLMCache:
+        """Open the SQLite connection and apply the DDL. Idempotent — safe to call twice."""
         if self._conn is not None:
             return self
         if isinstance(self._db_path, Path):
@@ -130,17 +131,21 @@ class LLMCache:
         return self
 
     def close(self) -> None:
+        """Close the SQLite connection. Safe to call when already closed."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     def __enter__(self) -> LLMCache:
+        """Support ``with LLMCache(...) as cache:`` — delegates to :meth:`open`."""
         return self.open()
 
     def __exit__(self, *_exc: object) -> None:
+        """Close the connection on context exit, even if the body raised."""
         self.close()
 
     def get(self, cache_key: str) -> CachedResponse | None:
+        """Look up a cached response by key. Returns ``None`` on a cache miss."""
         # LEARN: ``fetchone()`` returns ``None`` when the row does not
         # exist — perfect for our ``Optional`` return type. Callers
         # interpret ``None`` as "cache miss, go call the provider".
@@ -229,6 +234,7 @@ class LLMCache:
         return cur.rowcount
 
     def _require_conn(self) -> sqlite3.Connection:
+        """Return the open connection or raise :class:`LLMCacheError` if not opened yet."""
         if self._conn is None:
             raise LLMCacheError(
                 "LLMCache connection is not open; use as a context manager "
@@ -238,4 +244,5 @@ class LLMCache:
 
 
 def _utcnow_iso() -> str:
+    """Return the current UTC time formatted as ``YYYY-MM-DDTHH:MM:SSZ``."""
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -177,6 +177,11 @@ def extract_cep_prefix(text: str | None) -> str | None:
 
 
 def extract_cep_prefix_expr(expr: pl.Expr) -> pl.Expr:
+    """Polars wrapper around :func:`extract_cep_prefix`.
+
+    Null input rows are skipped — a message with no body produces a null
+    ``cep_prefix``, which is the honest "no signal" value.
+    """
     return expr.map_elements(
         extract_cep_prefix,
         return_dtype=pl.String,
@@ -203,6 +208,11 @@ def extract_has_phone_mention(text: str | None) -> bool:
 
 
 def extract_has_phone_mention_expr(expr: pl.Expr) -> pl.Expr:
+    """Polars wrapper around :func:`extract_has_phone_mention`.
+
+    ``skip_nulls=False`` mirrors :func:`extract_has_cpf_expr`: a null body
+    is treated as "no phone found" (``False``), not as a missing signal.
+    """
     return expr.map_elements(
         extract_has_phone_mention,
         return_dtype=pl.Boolean,
@@ -239,6 +249,11 @@ def extract_plate_format(text: str | None) -> PlateFormat | None:
 
 
 def extract_plate_format_expr(expr: pl.Expr) -> pl.Expr:
+    """Polars wrapper around :func:`extract_plate_format`.
+
+    Result is ``"mercosul"`` / ``"old"`` / ``null`` — a null means no
+    plate was detected, not that the message was missing.
+    """
     return expr.map_elements(
         extract_plate_format,
         return_dtype=pl.String,

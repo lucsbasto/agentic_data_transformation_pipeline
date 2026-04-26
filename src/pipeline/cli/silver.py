@@ -103,6 +103,12 @@ def silver(batch_id: str, bronze_root: Path, silver_root: Path) -> None:
 
 
 def _safe_resolve(path: Path, *, flag: str) -> Path:
+    """Reject ``..`` segments in ``path`` and return its canonical form.
+
+    Prevents directory traversal via operator-supplied path flags.
+    Mirrors the guard in :mod:`pipeline.cli.ingest` and
+    :mod:`pipeline.cli.gold`; all three CLI modules use the same pattern.
+    """
     if any(part == ".." for part in path.parts):
         raise click.ClickException(
             f"'..' segments are not allowed in {flag}: {path!s}"
@@ -132,6 +138,13 @@ def _run_silver(
     silver_root: Path,
     settings: Settings,
 ) -> None:
+    """Execute the Bronze → Silver transform and update the manifest.
+
+    Validates Bronze lineage, partitions rows into valid/rejected lanes,
+    runs the pure transform and LLM enrichment via :func:`_build_silver_frame`,
+    writes both lanes, and records ``COMPLETED`` or ``FAILED`` in the runs
+    table. Raises :class:`SilverError` on unrecoverable failures.
+    """
     logger = get_logger("pipeline.silver")
     bronze_part = bronze_root / f"batch_id={batch_id}" / "part-0.parquet"
     if not bronze_part.exists():
@@ -305,4 +318,5 @@ def _enrich_with_llm(df: pl.DataFrame, *, settings: Settings) -> pl.DataFrame:
 
 
 def _iso_now() -> str:
+    """Return the current UTC time as an ISO-8601 string for manifest timestamps."""
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

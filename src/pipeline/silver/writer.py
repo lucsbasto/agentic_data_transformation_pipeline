@@ -35,7 +35,12 @@ _COMPRESSION: Literal["zstd"] = "zstd"
 
 @dataclass(frozen=True, slots=True)
 class SilverWriteResult:
-    """Outcome of a single Silver partition write."""
+    """Outcome of a single Silver partition write.
+
+    Returned by :func:`write_silver` so the CLI layer can record
+    ``silver_path`` in the manifest and log ``rows_written`` without
+    reopening the file.
+    """
 
     silver_path: Path
     rows_written: int
@@ -91,7 +96,12 @@ def write_silver(
 
 @dataclass(frozen=True, slots=True)
 class RejectedWriteResult:
-    """Outcome of a single quarantine partition write."""
+    """Outcome of a single quarantine partition write.
+
+    Returned by :func:`write_rejected` so the CLI can record the
+    quarantine path in the manifest separately from the valid Silver path,
+    making operator triage of rejected rows unambiguous.
+    """
 
     rejected_path: Path
     rows_written: int

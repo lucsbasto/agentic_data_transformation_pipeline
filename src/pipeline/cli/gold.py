@@ -108,6 +108,13 @@ def gold(batch_id: str, silver_root: Path, gold_root: Path) -> None:
 
 
 def _safe_resolve(path: Path, *, flag: str) -> Path:
+    """Reject ``..`` segments and detect symlink escapes in ``path``.
+
+    Guards every operator-supplied path flag against directory traversal
+    and symlink-based sandbox escapes before any filesystem work begins.
+    Raises :class:`click.ClickException` on violation so the CLI exits
+    with a clean error message rather than a Python traceback.
+    """
     if any(part == ".." for part in path.parts):
         raise click.ClickException(f"'..' segments are not allowed in {flag}: {path!s}")
     resolved = path.resolve()
@@ -145,6 +152,13 @@ def _run_gold(
     gold_root: Path,
     settings: Settings,
 ) -> None:
+    """Execute the Silver → Gold transform and update the manifest.
+
+    Opens the manifest, enforces the Silver-lineage refusal contract,
+    runs :func:`transform_gold`, and records ``COMPLETED`` or ``FAILED``
+    in the runs table. Raises :class:`GoldError` on any unrecoverable
+    failure so the outer Click handler formats a clean exit-1 message.
+    """
     logger = get_logger("pipeline.gold")
     silver_part = silver_root / f"batch_id={batch_id}" / "part-0.parquet"
 
@@ -245,4 +259,5 @@ def _run_gold(
 
 
 def _iso_now() -> str:
+    """Return the current UTC time as an ISO-8601 string for manifest timestamps."""
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

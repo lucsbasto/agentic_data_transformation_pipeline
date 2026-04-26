@@ -37,10 +37,15 @@ _BRONZE_PARTITION_FILE: Final[str] = "part-0.parquet"
 class RunnerWiringError(AgentError):
     """Raised when the agent cannot resolve the source parquet for a
     requested ``batch_id`` — happens when the source file vanished or
-    a manifest entry is orphaned."""
+    a manifest entry is orphaned.
+
+    Why a dedicated error type: lets the fix dispatcher distinguish
+    "source gone" (cannot retry) from generic I/O failures."""
 
 
 def _bronze_partition_path(bronze_root: Path, batch_id: str) -> Path:
+    """Canonical path of the Bronze partition file for ``batch_id``.
+    Centralised here so runners and fix modules agree on the layout."""
     return bronze_root / f"batch_id={batch_id}" / _BRONZE_PARTITION_FILE
 
 
@@ -84,13 +89,22 @@ def make_runners_for(
     idempotency — the runner adapter is intentionally thin.
     """
     def _runners_for(batch_id: str) -> Mapping[Layer, LayerRunner]:
+        """Materialise a fresh set of layer runners bound to ``batch_id``.
+
+        Called once per batch in the loop so each runner captures the
+        correct batch context without shared mutable state."""
         def _bronze() -> None:
+            """Resolve the source parquet then delegate to the ingest CLI
+            helper. Source resolution is deferred to run-time so a missing
+            file surfaces as a classifiable exception, not a wiring error."""
             source = _resolve_source(source_root, batch_id)
             _run_ingest(
                 source=source, bronze_root=bronze_root, settings=settings
             )
 
         def _silver() -> None:
+            """Mint a fresh ``run_id`` per attempt so each retry gets its
+            own ``runs`` row; the Silver entrypoint owns idempotency."""
             _run_silver(
                 run_id=uuid.uuid4().hex,
                 batch_id=batch_id,
@@ -100,6 +114,8 @@ def make_runners_for(
             )
 
         def _gold() -> None:
+            """Same fresh-``run_id`` pattern as ``_silver`` — keeps the
+            Gold entrypoint decoupled from retry bookkeeping."""
             _run_gold(
                 run_id=uuid.uuid4().hex,
                 batch_id=batch_id,
@@ -143,6 +159,9 @@ def make_fix_builder(
         _layer: Layer,
         batch_id: str,
     ) -> Fix | None:
+        """Map ``kind`` to the appropriate fix factory. Returns ``None``
+        for ``REGEX_BREAK`` (needs sample harvesting not available at
+        this call site) and ``UNKNOWN`` (no deterministic fix exists)."""
         if kind is ErrorKind.SCHEMA_DRIFT:
             return schema_drift.build_fix(
                 _bronze_partition_path(bronze_root, batch_id)

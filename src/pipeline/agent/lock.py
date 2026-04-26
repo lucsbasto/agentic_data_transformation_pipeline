@@ -42,6 +42,10 @@ class AgentLock:
         *,
         stale_after_s: float = _DEFAULT_STALE_AFTER_S,
     ) -> None:
+        """Configure the lockfile location and staleness window.
+
+        Why: both are overridable so tests can use a tmp path and a
+        tiny stale window without touching the production state dir."""
         self._path: Path = Path(path)
         self._stale_after_s: float = stale_after_s
         self._held: bool = False
@@ -104,6 +108,7 @@ class AgentLock:
     # ------------------------------------------------------------------ context manager
 
     def __enter__(self) -> AgentLock:
+        """Acquire the lock and return self for the ``with`` block."""
         self.acquire()
         return self
 
@@ -113,6 +118,7 @@ class AgentLock:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        """Release on block exit — runs even when an exception propagates."""
         self.release()
 
     # ------------------------------------------------------------------ internals
@@ -132,6 +138,9 @@ class AgentLock:
             return None
 
     def _write_self_pid(self) -> None:
+        """Write this process's PID to the lockfile and set ``_held``.
+        Plain write suffices — the tool is single-operator; O_EXCL
+        atomicity would only matter with concurrent writers."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Plain write — single-operator tool, no need for O_EXCL atomicity.
         self._path.write_text(f"{os.getpid()}\n", encoding="utf-8")

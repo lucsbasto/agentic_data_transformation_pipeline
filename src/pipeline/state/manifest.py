@@ -205,6 +205,7 @@ class ManifestDB:
         return self
 
     def close(self) -> None:
+        """Close the SQLite connection. Safe to call when already closed."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -214,14 +215,17 @@ class ManifestDB:
     # and Python guarantees ``__exit__`` (which closes the connection)
     # runs even if the ``with`` body raises.
     def __enter__(self) -> ManifestDB:
+        """Support ``with ManifestDB(...) as db:`` — delegates to :meth:`open`."""
         return self.open()
 
     def __exit__(self, *_exc: object) -> None:
+        """Close the connection on context exit, even if the body raised."""
         self.close()
 
     # ------------------------------------------------------------------ schema
 
     def ensure_schema(self) -> None:
+        """Apply all DDL and pending column migrations. Idempotent — safe on every open."""
         with self._transaction() as cur:
             # LEARN: ``ALL_DDL`` is the tuple of DDL strings from
             # ``schemas/manifest.py``. Each ``IF NOT EXISTS`` makes the
@@ -346,6 +350,7 @@ class ManifestDB:
         error_type: str,
         error_message: str,
     ) -> None:
+        """Mark a batch FAILED and record the error type and message."""
         self._update_status(
             batch_id=batch_id,
             status=BATCH_STATUS_FAILED,
@@ -359,6 +364,7 @@ class ManifestDB:
     # ------------------------------------------------------------------ reads
 
     def get_batch(self, batch_id: str) -> BatchRow | None:
+        """Fetch one batch row by primary key. Returns ``None`` when not found."""
         conn = self._require_conn()
         # LEARN: ``execute(...).fetchone()`` runs the query and pulls
         # one row. Returns ``None`` if the row does not exist.
@@ -378,6 +384,7 @@ class ManifestDB:
         return BatchRow(**dict(row))
 
     def is_batch_completed(self, batch_id: str) -> bool:
+        """Return ``True`` when the batch exists and its status is COMPLETED."""
         batch = self.get_batch(batch_id)
         # LEARN: short-circuit boolean — if ``batch is None``, the
         # second expression is never evaluated (avoids AttributeError).
@@ -523,6 +530,7 @@ class ManifestDB:
         )
 
     def get_run(self, run_id: str) -> RunRow | None:
+        """Fetch one run row by primary key. Returns ``None`` when not found."""
         conn = self._require_conn()
         row = conn.execute(
             "SELECT run_id, batch_id, layer, status, started_at, finished_at, "
@@ -775,6 +783,7 @@ class ManifestDB:
     # ------------------------------------------------------------------ internals
 
     def _require_conn(self) -> sqlite3.Connection:
+        """Return the open connection or raise :class:`ManifestError` if not opened yet."""
         # LEARN: a "guard" method — call this before any read/write to
         # make the "DB is not open" mistake a loud error instead of an
         # obscure AttributeError down the line.
@@ -791,6 +800,7 @@ class ManifestDB:
     # ``yield`` on exit (whether the caller raised or not).
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Cursor]:
+        """Context manager that wraps a block in BEGIN / COMMIT, rolling back on error."""
         conn = self._require_conn()
         cur = conn.cursor()
         cur.execute("BEGIN;")
@@ -827,6 +837,11 @@ class ManifestDB:
         error_message: str | None = None,
         clear_error_fields: bool = False,
     ) -> None:
+        """Write the terminal status + metrics to a ``batches`` row.
+
+        ``clear_error_fields=True`` NULLs error columns so a COMPLETED row never
+        inherits error text from a prior FAILED attempt on the same batch.
+        """
         if status not in BATCH_STATUSES:
             raise ManifestError(
                 f"invalid status {status!r}; expected one of {BATCH_STATUSES}"
@@ -910,6 +925,12 @@ class ManifestDB:
         error_message: str | None = None,
         clear_error_fields: bool = False,
     ) -> None:
+        """Write the terminal status + metrics to a ``runs`` row.
+
+        Mirror of :meth:`_update_status` for the ``runs`` table. COALESCE
+        keeps metrics from any prior partial update rather than overwriting
+        with ``None``.
+        """
         if status not in RUN_STATUSES:
             raise ManifestError(
                 f"invalid run status {status!r}; expected one of {RUN_STATUSES}"
