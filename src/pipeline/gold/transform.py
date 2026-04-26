@@ -61,7 +61,11 @@ from pipeline.gold.writer import (
     write_gold_lead_profile,
 )
 from pipeline.logging import get_logger
-from pipeline.schemas.gold import PERSONA_VALUES, PRICE_SENSITIVITY_VALUES
+from pipeline.schemas.gold import (
+    PERSONA_VALUES,
+    PRICE_SENSITIVITY_VALUES,
+    SENTIMENT_VALUES,
+)
 from pipeline.settings import Settings
 
 __all__ = [
@@ -160,6 +164,12 @@ def transform_gold(
         "gold.persona.done",
         batch_id=batch_id,
         leads=len(aggregates),
+    )
+    _LOG.info(
+        "gold.sentiment.batch_complete",
+        batch_id=batch_id,
+        leads=len(aggregates),
+        **_sentiment_telemetry(persona_results),
     )
 
     intent_inputs_lf = _compute_intent_score_inputs(silver_lf, conversation_scores_lf)
@@ -267,11 +277,14 @@ def _apply_persona_and_intent_score(
     minus ``persona`` (joined here from ``persona_results``).
     """
     persona_dtype = pl.Enum(list(PERSONA_VALUES))
+    sentiment_dtype = pl.Enum(list(SENTIMENT_VALUES))
     persona_rows = [
         {
             "lead_id": lead_id,
             "persona_filled": result.persona,
             "persona_confidence_filled": result.persona_confidence,
+            "sentiment_filled": result.sentiment,
+            "sentiment_confidence_filled": result.sentiment_confidence,
         }
         for lead_id, result in persona_results.items()
     ]
@@ -281,6 +294,8 @@ def _apply_persona_and_intent_score(
             "lead_id": pl.String(),
             "persona_filled": persona_dtype,
             "persona_confidence_filled": pl.Float64(),
+            "sentiment_filled": sentiment_dtype,
+            "sentiment_confidence_filled": pl.Float64(),
         },
     )
 
@@ -300,12 +315,23 @@ def _apply_persona_and_intent_score(
     filled = joined.with_columns(
         pl.col("persona_filled").alias("persona"),
         pl.col("persona_confidence_filled").alias("persona_confidence"),
+        pl.col("sentiment_filled").alias("sentiment"),
+        pl.col("sentiment_confidence_filled").alias("sentiment_confidence"),
         price_sensitivity_expr.alias("price_sensitivity"),
-    ).drop(["persona_filled", "persona_confidence_filled"])
+    ).drop(
+        [
+            "persona_filled",
+            "persona_confidence_filled",
+            "sentiment_filled",
+            "sentiment_confidence_filled",
+        ]
+    )
 
     scored = compute_intent_score(filled)
     # Drop the helper input columns and reorder so the output matches
-    # GOLD_LEAD_PROFILE_SCHEMA position-for-position.
+    # GOLD_LEAD_PROFILE_SCHEMA position-for-position. F5: sentiment +
+    # sentiment_confidence appended between persona_confidence and
+    # price_sensitivity to match _LEAD_PROFILE_FIELDS order.
     return scored.select(
         [
             "lead_id",
@@ -319,6 +345,8 @@ def _apply_persona_and_intent_score(
             "engagement_profile",
             "persona",
             "persona_confidence",
+            "sentiment",
+            "sentiment_confidence",
             "price_sensitivity",
             "intent_score",
             "first_seen_at",
@@ -418,6 +446,29 @@ def _avg_lead_response_per_lead(conversation_scores_lf: pl.LazyFrame) -> pl.Lazy
     return conversation_scores_lf.group_by("lead_id", maintain_order=False).agg(
         pl.col("avg_lead_response_sec").mean().alias("avg_lead_response_sec")
     )
+
+
+def _sentiment_telemetry(
+    persona_results: dict[str, PersonaResult],
+) -> dict[str, object]:
+    """Per-batch sentiment counters for observability.
+
+    Reports both the source mix (rule / llm / llm_fallback / skipped)
+    and the per-label histogram. The label histogram drives the
+    F5 calibration gate (e.g. ``misto`` ≤ 25% post-deploy).
+    """
+    source_counts: dict[str, int] = {}
+    label_counts: dict[str, int] = {}
+    for result in persona_results.values():
+        source_counts[result.sentiment_source] = (
+            source_counts.get(result.sentiment_source, 0) + 1
+        )
+        label = result.sentiment if result.sentiment is not None else "_null"
+        label_counts[label] = label_counts.get(label, 0) + 1
+    return {
+        "sentiment_source_mix": source_counts,
+        "sentiment_label_mix": label_counts,
+    }
 
 
 def _persona_distribution(lead_profile_df: pl.DataFrame) -> dict[str, int]:

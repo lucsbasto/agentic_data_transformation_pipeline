@@ -35,6 +35,7 @@ from pipeline.schemas.gold import (
     GOLD_LEAD_PROFILE_SCHEMA,
     PERSONA_VALUES,
     PRICE_SENSITIVITY_VALUES,
+    SENTIMENT_VALUES,
 )
 
 __all__ = ["build_lead_profile_skeleton"]
@@ -194,19 +195,23 @@ def _add_engagement_profile(
 
 
 def _add_persona_and_score_placeholders(per_lead: pl.LazyFrame) -> pl.LazyFrame:
-    """Materialize ``persona``, ``persona_confidence``,
-    ``price_sensitivity``, and ``intent_score`` as typed nulls so
+    """Materialize the classifier-filled columns as typed nulls so
     :data:`GOLD_LEAD_PROFILE_SCHEMA` matches at collect time.
 
-    F3.10 fills persona / persona_confidence; F3.11 fills
-    price_sensitivity / intent_score. Until then, downstream
-    consumers see ``null`` and can distinguish "skipped" from "zero".
+    Columns: ``persona`` / ``persona_confidence`` (F3.10),
+    ``sentiment`` / ``sentiment_confidence`` (F5),
+    ``price_sensitivity`` / ``intent_score`` (F3.11). Until the
+    enrichment pass runs, downstream consumers see ``null`` and can
+    distinguish "skipped" from "zero".
     """
     persona_dtype = pl.Enum(list(PERSONA_VALUES))
+    sentiment_dtype = pl.Enum(list(SENTIMENT_VALUES))
     price_dtype = pl.Enum(list(PRICE_SENSITIVITY_VALUES))
     return per_lead.with_columns(
         pl.lit(None, dtype=persona_dtype).alias("persona"),
         pl.lit(None, dtype=pl.Float64).alias("persona_confidence"),
+        pl.lit(None, dtype=sentiment_dtype).alias("sentiment"),
+        pl.lit(None, dtype=pl.Float64).alias("sentiment_confidence"),
         pl.lit(None, dtype=price_dtype).alias("price_sensitivity"),
         pl.lit(None, dtype=pl.Int32).alias("intent_score"),
     )

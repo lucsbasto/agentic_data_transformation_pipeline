@@ -37,6 +37,7 @@ __all__ = [
     "OUTCOME_MIX_STRUCT",
     "PERSONA_VALUES",
     "PRICE_SENSITIVITY_VALUES",
+    "SENTIMENT_VALUES",
     "assert_agent_performance_schema",
     "assert_competitor_intel_schema",
     "assert_conversation_scores_schema",
@@ -71,6 +72,18 @@ ENGAGEMENT_PROFILE_VALUES: Final[tuple[str, ...]] = ("hot", "warm", "cold")
 
 PRICE_SENSITIVITY_VALUES: Final[tuple[str, ...]] = ("low", "medium", "high")
 """Three-bucket price-sensitivity classification (F3-RF-16)."""
+
+SENTIMENT_VALUES: Final[tuple[str, ...]] = (
+    # F5 — per-lead sentiment (assessment §"Análise de sentimento do
+    # cliente"). Ordered by polarity for stable dashboard sort.
+    # "misto" is intentional for leads with multi-conversation
+    # alternation; the LLM and hard rules pick one value per lead.
+    "positivo",
+    "neutro",
+    "negativo",
+    "misto",
+)
+"""Closed set of per-lead sentiment labels (F5)."""
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +155,8 @@ _LEAD_PROFILE_FIELDS: dict[str, pl.DataType] = {
     "engagement_profile": pl.Enum(list(ENGAGEMENT_PROFILE_VALUES)),
     "persona": pl.Enum(list(PERSONA_VALUES)),
     "persona_confidence": pl.Float64(),
+    "sentiment": pl.Enum(list(SENTIMENT_VALUES)),
+    "sentiment_confidence": pl.Float64(),
     "price_sensitivity": pl.Enum(list(PRICE_SENSITIVITY_VALUES)),
     # ``intent_score`` ∈ [0, 100] — clamped + cast at compute time.
     "intent_score": pl.Int32(),
